@@ -1,0 +1,30 @@
+services:
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - prezenter-worker
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ../frontend:/srv:ro
+      - ./caddy/data:/data
+      - ./caddy/config:/config
+
+  prezenter-worker:
+    build:
+      context: ../worker
+    image: prezenter-worker:latest
+    restart: unless-stopped
+    env_file:
+      - .env
+    user: "${PREZENTER_UID:-1000}:${PREZENTER_GID:-1000}"
+    environment:
+      HOME: /tmp
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./data:/data

@@ -1,0 +1,24 @@
+prezenter.eu.org {
+	root * /srv
+	try_files {path} /index.html
+	file_server
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer-when-downgrade"
+	}
+}
+
+api.prezenter.eu.org {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer-when-downgrade"
+	}
+
+	reverse_proxy prezenter-worker:8080
+}

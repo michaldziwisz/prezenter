@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="pl">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Prezenter</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="wrap">
+        <p class="brand">Prezenter</p>
+      </div>
+    </header>
+
+    <main>
+      <section class="band">
+        <div class="wrap intro">
+          <h1>Dostępne prezentacje Markdown</h1>
+          <p>Przygotuj paczkę prezentacji, sprawdź wymagane deklaracje i opublikuj ją publicznie.</p>
+        </div>
+      </section>
+
+      <section class="band band-alt">
+        <div class="wrap layout">
+          <form id="publish-form" class="panel" novalidate>
+            <h2>Publikacja</h2>
+
+            <div class="field">
+              <label for="api-url">Adres API</label>
+              <input id="api-url" name="apiUrl" type="url" required autocomplete="url" value="https://api.prezenter.eu.org">
+            </div>
+
+            <div class="field">
+              <label for="title">Tytuł prezentacji</label>
+              <input id="title" name="title" type="text" required autocomplete="off">
+            </div>
+
+            <div class="field">
+              <label for="language">Język</label>
+              <select id="language" name="language" required>
+                <option value="pl">Polski</option>
+                <option value="en">English</option>
+              </select>
+            </div>
+
+            <div class="field">
+              <label for="license">Licencja lub URL licencji</label>
+              <input id="license" name="license" type="text" required value="CC BY 4.0">
+            </div>
+
+            <div class="field">
+              <label for="bundle">Paczka prezentacji</label>
+              <input id="bundle" name="bundle" type="file" required accept=".zip,.tar,.gz,.tgz,.md">
+              <p id="bundle-hint" class="hint">Obsługiwane: ZIP, TAR, TGZ albo pojedynczy plik Markdown.</p>
+            </div>
+
+            <fieldset>
+              <legend>Deklaracje</legend>
+              <label class="check">
+                <input id="rights-confirmed" name="rightsConfirmed" type="checkbox" required>
+                Mam prawa do publikowanych materiałów.
+              </label>
+              <label class="check">
+                <input id="public-confirmed" name="publicConfirmed" type="checkbox" required>
+                Rozumiem, że publikacja będzie publiczna.
+              </label>
+              <label class="check">
+                <input id="a11y-confirmed" name="accessibilityConfirmed" type="checkbox" required>
+                Materiały mają opisy alternatywne, tytuły i transkrypcje tam, gdzie są potrzebne.
+              </label>
+            </fieldset>
+
+            <button type="submit">Publikuj</button>
+          </form>
+
+          <section class="panel" aria-labelledby="status-title">
+            <h2 id="status-title">Status</h2>
+            <div id="status" class="status" aria-live="polite" aria-atomic="true">Gotowe.</div>
+            <dl id="publication-details" class="details"></dl>
+          </section>
+        </div>
+      </section>
+
+      <section class="band">
+        <div class="wrap layout">
+          <section class="panel" aria-labelledby="room-title">
+            <h2 id="room-title">Tryb prezentera</h2>
+
+            <div class="field">
+              <label for="room-api-url">Adres API</label>
+              <input id="room-api-url" type="url" value="https://api.prezenter.eu.org">
+            </div>
+
+            <div class="field">
+              <label for="room-id">Pokój</label>
+              <input id="room-id" type="text" autocomplete="off">
+            </div>
+
+            <div class="field">
+              <label for="presenter-key">Token prezentera</label>
+              <input id="presenter-key" type="password" autocomplete="off">
+            </div>
+
+            <div class="actions">
+              <button id="create-room" type="button">Utwórz pokój</button>
+              <button id="connect-presenter" type="button">Połącz jako prezenter</button>
+              <button id="connect-viewer" type="button">Połącz jako widz</button>
+            </div>
+
+            <div class="controls" aria-labelledby="slide-controls-title">
+              <h3 id="slide-controls-title">Sterowanie</h3>
+              <button id="prev-slide" type="button">Poprzedni slajd</button>
+              <button id="next-slide" type="button">Następny slajd</button>
+              <button id="toggle-pause" type="button">Pauza</button>
+            </div>
+          </section>
+
+          <section class="panel" aria-labelledby="sync-title">
+            <h2 id="sync-title">Synchronizacja</h2>
+            <div id="sync-status" class="status" aria-live="polite" aria-atomic="true">Nie połączono.</div>
+            <dl class="details">
+              <div>
+                <dt>Slajd poziomy</dt>
+                <dd id="state-h">0</dd>
+              </div>
+              <div>
+                <dt>Slajd pionowy</dt>
+                <dd id="state-v">0</dd>
+              </div>
+              <div>
+                <dt>Fragment</dt>
+                <dd id="state-fragment">-1</dd>
+              </div>
+              <div>
+                <dt>Pauza</dt>
+                <dd id="state-paused">nie</dd>
+              </div>
+            </dl>
+          </section>
+        </div>
+      </section>
+    </main>
+
+    <script src="./app.js" type="module"></script>
+  </body>
+</html>

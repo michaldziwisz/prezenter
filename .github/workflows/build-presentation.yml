@@ -1,0 +1,147 @@
+name: Build Presentation
+
+on:
+  workflow_dispatch:
+    inputs:
+      publication_id:
+        required: true
+        type: string
+      source_identifier:
+        required: true
+        type: string
+      source_file:
+        required: true
+        type: string
+      output_identifier:
+        required: true
+        type: string
+      callback_url:
+        required: true
+        type: string
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pandoc unzip python3-pip
+          python3 -m pip install --user internetarchive
+
+      - name: Configure Internet Archive
+        run: |
+          mkdir -p ~/.config
+          cat > ~/.config/ia.ini <<EOF
+          [s3]
+          access = ${{ secrets.ARCHIVE_ACCESS_KEY }}
+          secret = ${{ secrets.ARCHIVE_SECRET_KEY }}
+          EOF
+          chmod 600 ~/.config/ia.ini
+
+      - name: Download source bundle
+        run: |
+          mkdir -p source bundle dist
+          ~/.local/bin/ia download "${{ inputs.source_identifier }}" \
+            --files "${{ inputs.source_file }}" \
+            --destdir bundle \
+            --no-directories
+          case "${{ inputs.source_file }}" in
+            *.zip)
+              unzip -q "bundle/${{ inputs.source_file }}" -d source
+              ;;
+            *.tar.gz|*.tgz)
+              tar -xzf "bundle/${{ inputs.source_file }}" -C source
+              ;;
+            *.tar)
+              tar -xf "bundle/${{ inputs.source_file }}" -C source
+              ;;
+            *.md)
+              cp "bundle/${{ inputs.source_file }}" source/slides.md
+              ;;
+            *)
+              echo "Unsupported source file" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Build reveal.js HTML
+        run: |
+          slides="$(find source -maxdepth 3 -name 'slides.md' -print -quit)"
+          if [ -z "$slides" ]; then
+            slides="$(find source -maxdepth 3 -name '*.md' -print -quit)"
+          fi
+          if [ -z "$slides" ]; then
+            echo "No Markdown file found" >&2
+            exit 1
+          fi
+          pandoc "$slides" \
+            --standalone \
+            --to revealjs \
+            --embed-resources \
+            --resource-path="$(dirname "$slides"):source" \
+            -V revealjs-url=https://unpkg.com/reveal.js@5 \
+            -V lang=pl \
+            -o dist/index.html
+          cat > dist/accessibility-report.json <<EOF
+          {
+            "status": "basic-build-complete",
+            "notes": [
+              "Pandoc build completed.",
+              "Full axe/Playwright checks should be added before public beta."
+            ]
+          }
+          EOF
+
+      - name: Upload build to Internet Archive
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import internetarchive
+          import os
+
+          identifier = os.environ["OUTPUT_IDENTIFIER"]
+          item = internetarchive.get_item(identifier)
+          metadata = {
+              "title": f"{identifier} presentation",
+              "mediatype": "data",
+              "creator": "Prezenter",
+              "subject": ["prezenter", "markdown", "revealjs", "presentation"],
+          }
+          files = [str(path) for path in Path("dist").rglob("*") if path.is_file()]
+          item.upload(files, metadata=metadata, retries=3, verbose=True)
+          PY
+        env:
+          OUTPUT_IDENTIFIER: ${{ inputs.output_identifier }}
+
+      - name: Callback success
+        if: success()
+        run: |
+          curl -fsS -X POST "${{ inputs.callback_url }}" \
+            -H "Content-Type: application/json" \
+            -H "X-Prezenter-Callback-Secret: ${{ secrets.CALLBACK_SECRET }}" \
+            --data @- <<EOF
+          {
+            "publicationId": "${{ inputs.publication_id }}",
+            "status": "published",
+            "archiveIdentifier": "${{ inputs.output_identifier }}",
+            "resultUrl": "https://archive.org/download/${{ inputs.output_identifier }}/index.html",
+            "accessibilityReport": "https://archive.org/download/${{ inputs.output_identifier }}/accessibility-report.json"
+          }
+          EOF
+
+      - name: Callback failure
+        if: failure()
+        run: |
+          curl -fsS -X POST "${{ inputs.callback_url }}" \
+            -H "Content-Type: application/json" \
+            -H "X-Prezenter-Callback-Secret: ${{ secrets.CALLBACK_SECRET }}" \
+            --data @- <<EOF
+          {
+            "publicationId": "${{ inputs.publication_id }}",
+            "status": "failed"
+          }
+          EOF
+

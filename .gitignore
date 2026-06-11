@@ -1,0 +1,7 @@
+creds.txt
+deploy/.env
+deploy/data/
+deploy/caddy/data/
+deploy/caddy/config/
+worker/node_modules/
+.DS_Store

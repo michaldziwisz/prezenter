@@ -80,3 +80,12 @@ docker compose up -d
 
 For public use from GitHub Pages, put an HTTPS reverse proxy in front of the
 worker and allow only the frontend origin in `ALLOWED_ORIGINS`.
+
+## GitHub Worker Token
+
+The worker should use a fine-grained GitHub PAT limited to the single
+`michaldziwisz/prezenter` repository with `Actions: Read and write`.
+
+See [docs/security.md](docs/security.md) for the token template URL and local
+installation script. Do not configure GitHub authentication with `gh` on the
+VPS.

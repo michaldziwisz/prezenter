@@ -29,7 +29,10 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y pandoc unzip python3-pip
-          python3 -m pip install --user internetarchive
+          python3 -m venv "$RUNNER_TEMP/ia-venv"
+          "$RUNNER_TEMP/ia-venv/bin/pip" install --upgrade pip
+          "$RUNNER_TEMP/ia-venv/bin/pip" install internetarchive
+          echo "$RUNNER_TEMP/ia-venv/bin" >> "$GITHUB_PATH"
 
       - name: Configure Internet Archive
         run: |
@@ -44,7 +47,7 @@ jobs:
       - name: Download source bundle
         run: |
           mkdir -p source bundle dist
-          ~/.local/bin/ia download "${{ inputs.source_identifier }}" \
+          ia download "${{ inputs.source_identifier }}" \
             --files "${{ inputs.source_file }}" \
             --destdir bundle \
             --no-directories
@@ -144,4 +147,3 @@ jobs:
             "status": "failed"
           }
           EOF
-

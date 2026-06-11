@@ -1,7 +1,7 @@
 import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
 import Fastify from 'fastify';
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { createHash, createSign, randomBytes, randomUUID } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -31,6 +31,10 @@ const config = {
   archiveCollection: env.ARCHIVE_COLLECTION ?? '',
   archiveCreator: env.ARCHIVE_CREATOR ?? 'Prezenter',
   githubToken: env.GITHUB_TOKEN ?? '',
+  githubAppId: env.GITHUB_APP_ID ?? '',
+  githubAppInstallationId: env.GITHUB_APP_INSTALLATION_ID ?? '',
+  githubAppPrivateKeyBase64: env.GITHUB_APP_PRIVATE_KEY_BASE64 ?? '',
+  githubAppPrivateKey: env.GITHUB_APP_PRIVATE_KEY ?? '',
   githubOwner: env.GITHUB_OWNER ?? '',
   githubRepo: env.GITHUB_REPO ?? '',
   githubWorkflow: env.GITHUB_WORKFLOW ?? 'build-presentation.yml',
@@ -47,6 +51,7 @@ const dirs = {
 
 const publicationBuckets = new Map();
 const rooms = new Map();
+let githubInstallationTokenCache = null;
 
 const app = Fastify({
   logger: true,
@@ -497,13 +502,24 @@ function missingLiveConfiguration() {
   const required = {
     ARCHIVE_ACCESS_KEY: config.archiveAccessKey,
     ARCHIVE_SECRET_KEY: config.archiveSecretKey,
-    GITHUB_TOKEN: config.githubToken,
     GITHUB_OWNER: config.githubOwner,
     GITHUB_REPO: config.githubRepo,
     CALLBACK_SECRET: config.callbackSecret,
     PUBLIC_API_URL: config.publicApiUrl
   };
-  return Object.entries(required).filter(([, value]) => !value).map(([key]) => key);
+  const missing = Object.entries(required).filter(([, value]) => !value).map(([key]) => key);
+  if (!hasGithubDispatchCredentials()) {
+    missing.push('GITHUB_APP_ID/GITHUB_APP_INSTALLATION_ID/GITHUB_APP_PRIVATE_KEY_BASE64 or GITHUB_TOKEN');
+  }
+  return missing;
+}
+
+function hasGithubDispatchCredentials() {
+  return Boolean(config.githubToken || (
+    config.githubAppId
+    && config.githubAppInstallationId
+    && getGithubAppPrivateKey()
+  ));
 }
 
 async function uploadSourceToArchive(publication) {
@@ -535,12 +551,13 @@ async function uploadSourceToArchive(publication) {
 
 async function dispatchGithubWorkflow(publication) {
   const callbackUrl = `${config.publicApiUrl}/api/github/callback`;
+  const githubToken = await getGithubDispatchToken();
   const response = await fetch(
     `https://api.github.com/repos/${config.githubOwner}/${config.githubRepo}/actions/workflows/${config.githubWorkflow}/dispatches`,
     {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${config.githubToken}`,
+        Authorization: `Bearer ${githubToken}`,
         Accept: 'application/vnd.github+json',
         'Content-Type': 'application/json',
         'User-Agent': 'prezenter-worker'
@@ -562,6 +579,91 @@ async function dispatchGithubWorkflow(publication) {
     const text = await response.text();
     throw new Error(`GitHub workflow dispatch failed: ${response.status} ${text}`);
   }
+}
+
+async function getGithubDispatchToken() {
+  if (config.githubAppId && config.githubAppInstallationId && getGithubAppPrivateKey()) {
+    return getGithubAppInstallationToken();
+  }
+  if (config.githubToken) {
+    return config.githubToken;
+  }
+  throw new Error('GitHub dispatch credentials are not configured.');
+}
+
+async function getGithubAppInstallationToken() {
+  const now = Date.now();
+  if (
+    githubInstallationTokenCache
+    && githubInstallationTokenCache.expiresAtMs - 60_000 > now
+  ) {
+    return githubInstallationTokenCache.token;
+  }
+
+  const jwt = createGithubAppJwt();
+  const response = await fetch(
+    `https://api.github.com/app/installations/${config.githubAppInstallationId}/access_tokens`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${jwt}`,
+        Accept: 'application/vnd.github+json',
+        'Content-Type': 'application/json',
+        'User-Agent': 'prezenter-worker',
+        'X-GitHub-Api-Version': '2022-11-28'
+      },
+      body: JSON.stringify({
+        repositories: [config.githubRepo],
+        permissions: {
+          actions: 'write'
+        }
+      })
+    }
+  );
+
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok || !body.token) {
+    throw new Error(`GitHub App installation token failed: ${response.status} ${JSON.stringify(body)}`);
+  }
+
+  githubInstallationTokenCache = {
+    token: body.token,
+    expiresAtMs: Date.parse(body.expires_at)
+  };
+  return githubInstallationTokenCache.token;
+}
+
+function createGithubAppJwt() {
+  const privateKey = getGithubAppPrivateKey();
+  if (!privateKey) throw new Error('GitHub App private key is not configured.');
+
+  const now = Math.floor(Date.now() / 1000);
+  const header = base64UrlJson({ alg: 'RS256', typ: 'JWT' });
+  const payload = base64UrlJson({
+    iat: now - 60,
+    exp: now + 540,
+    iss: config.githubAppId
+  });
+  const unsigned = `${header}.${payload}`;
+  const signer = createSign('RSA-SHA256');
+  signer.update(unsigned);
+  signer.end();
+  const signature = signer.sign(privateKey, 'base64url');
+  return `${unsigned}.${signature}`;
+}
+
+function getGithubAppPrivateKey() {
+  if (config.githubAppPrivateKeyBase64) {
+    return Buffer.from(config.githubAppPrivateKeyBase64, 'base64').toString('utf8');
+  }
+  if (config.githubAppPrivateKey) {
+    return config.githubAppPrivateKey.replace(/\\n/g, '\n');
+  }
+  return '';
+}
+
+function base64UrlJson(value) {
+  return Buffer.from(JSON.stringify(value)).toString('base64url');
 }
 
 function runCommand(command, args, options = {}) {

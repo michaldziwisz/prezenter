@@ -52,13 +52,15 @@ Edit `/opt/prezenter/deploy/.env` on the server and set:
 
 ```dotenv
 PUBLISH_MODE=live
-PUBLIC_API_URL=https://api.example.org
-PUBLIC_FRONTEND_URL=https://example.github.io/prezenter
+PUBLIC_API_URL=https://api.prezenter.eu.org
+PUBLIC_FRONTEND_URL=https://prezenter.eu.org
 ARCHIVE_ACCESS_KEY=...
 ARCHIVE_SECRET_KEY=...
-GITHUB_TOKEN=...
 GITHUB_OWNER=...
 GITHUB_REPO=...
+GITHUB_APP_ID=...
+GITHUB_APP_INSTALLATION_ID=...
+GITHUB_APP_PRIVATE_KEY_BASE64=...
 CALLBACK_SECRET=...
 ```
 
@@ -81,11 +83,12 @@ docker compose up -d
 For public use from GitHub Pages, put an HTTPS reverse proxy in front of the
 worker and allow only the frontend origin in `ALLOWED_ORIGINS`.
 
-## GitHub Worker Token
+## GitHub Workflow Dispatch
 
-The worker should use a fine-grained GitHub PAT limited to the single
-`michaldziwisz/prezenter` repository with `Actions: Read and write`.
+The worker should use a GitHub App installed only on `michaldziwisz/prezenter`
+with `Actions: Read and write`. A fine-grained PAT is supported only as a
+fallback.
 
-See [docs/security.md](docs/security.md) for the token template URL and local
-installation script. Do not configure GitHub authentication with `gh` on the
+See [docs/security.md](docs/security.md) for exact GitHub UI steps and local
+installation scripts. Do not configure GitHub authentication with `gh` on the
 VPS.

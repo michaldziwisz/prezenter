@@ -21,7 +21,7 @@ if [ ! -f "$private_key_path" ]; then
   exit 1
 fi
 
-validation_script="$(mktemp)"
+validation_script="$(mktemp --suffix=.mjs)"
 validation_output="$(mktemp)"
 payload="$(mktemp)"
 trap 'rm -f "$validation_script" "$validation_output" "$payload"' EXIT

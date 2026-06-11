@@ -1,4 +1,5 @@
 creds.txt
+*.pem
 deploy/.env
 deploy/data/
 deploy/caddy/data/

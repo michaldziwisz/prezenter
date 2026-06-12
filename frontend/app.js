@@ -2,6 +2,9 @@ const publishForm = document.querySelector('#publish-form');
 const statusBox = document.querySelector('#status');
 const details = document.querySelector('#publication-details');
 const apiUrlInput = document.querySelector('#api-url');
+const bundleInput = document.querySelector('#bundle');
+const bundleHint = document.querySelector('#bundle-hint');
+const modeInputs = [...document.querySelectorAll('input[name="presentationMode"]')];
 
 const roomApiUrl = document.querySelector('#room-api-url');
 const roomIdInput = document.querySelector('#room-id');
@@ -27,9 +30,16 @@ const presenterKeyFromHash = new URLSearchParams(window.location.hash.slice(1)).
 if (roomFromUrl) roomIdInput.value = roomFromUrl;
 if (presenterKeyFromHash) presenterKeyInput.value = presenterKeyFromHash;
 
+modeInputs.forEach((input) => {
+  input.addEventListener('change', updateBundleMode);
+});
+bundleInput.addEventListener('change', validateBundleForMode);
+updateBundleMode();
+
 publishForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   clearDetails();
+  validateBundleForMode();
 
   if (!publishForm.reportValidity()) {
     setStatus('Uzupełnij wymagane pola.', true);
@@ -37,7 +47,8 @@ publishForm.addEventListener('submit', async (event) => {
   }
 
   const formData = new FormData();
-  const bundle = document.querySelector('#bundle').files[0];
+  const bundle = bundleInput.files[0];
+  formData.set('presentationMode', getPresentationMode());
   formData.set('title', document.querySelector('#title').value);
   formData.set('language', document.querySelector('#language').value);
   formData.set('license', document.querySelector('#license').value);
@@ -93,15 +104,15 @@ document.querySelector('#next-slide').addEventListener('click', () => updateSlid
 document.querySelector('#toggle-pause').addEventListener('click', () => updateSlide({ paused: !slideState.paused }));
 
 async function pollStatus(publicationId) {
-  for (let index = 0; index < 30; index += 1) {
-    await wait(3000);
+  for (let index = 0; index < 120; index += 1) {
+    await wait(5000);
     try {
       const response = await fetch(`${normalizeUrl(apiUrlInput.value)}/api/publications/${publicationId}/status`);
       const payload = await response.json();
       if (response.ok) {
         setStatus(`Status: ${payload.status}.`);
         renderPublication(payload);
-        if (['queued_in_github_actions', 'published', 'failed', 'awaiting_configuration'].includes(payload.status)) return;
+        if (['published', 'failed', 'awaiting_configuration'].includes(payload.status)) return;
       }
     } catch {
       return;
@@ -169,8 +180,11 @@ function renderPublication(publication) {
   clearDetails();
   addDetail('Identyfikator', publication.id);
   addDetail('Status', publication.status);
+  addDetail('Format', formatPresentationMode(publication.presentationMode));
   addDetail('Źródło IA', publication.sourceIdentifier);
   addDetail('Wynik IA', publication.outputIdentifier);
+  if (publication.resultUrl) addLinkDetail('Publikacja', publication.resultUrl);
+  if (publication.accessibilityReport) addLinkDetail('Raport dostępności', publication.accessibilityReport);
   if (publication.viewerUrl) addLinkDetail('Link widza', publication.viewerUrl);
   if (publication.presenterUrl) addLinkDetail('Link prezentera', publication.presenterUrl);
   if (publication.missingConfiguration?.length) {
@@ -205,6 +219,51 @@ function clearDetails() {
   details.replaceChildren();
 }
 
+function updateBundleMode() {
+  const mode = getPresentationMode();
+  bundleInput.accept = mode === 'pptx' ? '.pptx' : '.zip,.tar,.gz,.tgz,.md';
+  bundleHint.textContent = mode === 'pptx'
+    ? 'Obsługiwane: pojedynczy plik PPTX.'
+    : 'Obsługiwane: ZIP, TAR, TGZ albo pojedynczy plik Markdown.';
+  validateBundleForMode();
+}
+
+function validateBundleForMode() {
+  const file = bundleInput.files[0];
+  if (!file) {
+    bundleInput.setCustomValidity('');
+    bundleInput.removeAttribute('aria-invalid');
+    return;
+  }
+
+  const name = file.name.toLowerCase();
+  const mode = getPresentationMode();
+  const valid = mode === 'pptx'
+    ? name.endsWith('.pptx')
+    : /\.(zip|tar|tar\.gz|tgz|md)$/.test(name);
+
+  if (valid) {
+    bundleInput.removeAttribute('aria-invalid');
+  } else {
+    bundleInput.setAttribute('aria-invalid', 'true');
+  }
+
+  bundleInput.setCustomValidity(valid
+    ? ''
+    : mode === 'pptx'
+      ? 'Wybierz plik PPTX.'
+      : 'Wybierz plik ZIP, TAR, TGZ albo Markdown.');
+}
+
+function getPresentationMode() {
+  return modeInputs.find((input) => input.checked)?.value || 'markdown';
+}
+
+function formatPresentationMode(mode) {
+  if (mode === 'pptx') return 'PPTX + PDF';
+  return 'Markdown / reveal.js';
+}
+
 function setStatus(message, error = false) {
   statusBox.textContent = message;
   statusBox.classList.toggle('error', error);
@@ -228,4 +287,3 @@ function normalizeUrl(value) {
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
-

@@ -144,7 +144,8 @@ app.post('/api/publish', async (request, reply) => {
     }
   }
 
-  const validation = validatePublication(fields, uploadedFile);
+  const presentationMode = resolvePresentationMode(fields, uploadedFile);
+  const validation = validatePublication(fields, uploadedFile, presentationMode);
   if (validation.length > 0) {
     reply.code(400);
     return { error: 'invalid_publication', details: validation };
@@ -163,6 +164,7 @@ app.post('/api/publish', async (request, reply) => {
     updatedAt: createdAt,
     status: 'received',
     title,
+    presentationMode,
     language: fields.language,
     license: fields.license,
     sourceIdentifier,
@@ -360,8 +362,11 @@ function makeArchiveIdentifier(prefix, title, short) {
   return `${prefix}-${slugify(title).slice(0, 48)}-${short}`.replace(/[^a-z0-9._-]/g, '-');
 }
 
-function validatePublication(fields, uploadedFile) {
+function validatePublication(fields, uploadedFile, presentationMode) {
   const errors = [];
+  if (parsePresentationMode(fields.presentationMode) === null) {
+    errors.push({ field: 'presentationMode', message: 'Presentation mode must be markdown or pptx.' });
+  }
   if (!fields.title) errors.push({ field: 'title', message: 'Title is required.' });
   if (!fields.language) errors.push({ field: 'language', message: 'Language is required.' });
   if (!fields.license) errors.push({ field: 'license', message: 'License is required.' });
@@ -369,10 +374,26 @@ function validatePublication(fields, uploadedFile) {
   if (fields.publicConfirmed !== 'true') errors.push({ field: 'publicConfirmed', message: 'Public publication confirmation is required.' });
   if (fields.accessibilityConfirmed !== 'true') errors.push({ field: 'accessibilityConfirmed', message: 'Accessibility confirmation is required.' });
   if (!uploadedFile) errors.push({ field: 'bundle', message: 'A presentation bundle file is required.' });
-  if (uploadedFile && !/\.(zip|tar|tar\.gz|tgz|md)$/i.test(uploadedFile.filename)) {
-    errors.push({ field: 'bundle', message: 'Bundle must be .zip, .tar, .tar.gz, .tgz, or .md.' });
+  if (uploadedFile && presentationMode === 'pptx' && !/\.pptx$/i.test(uploadedFile.filename)) {
+    errors.push({ field: 'bundle', message: 'PPTX mode requires a .pptx file.' });
+  }
+  if (uploadedFile && presentationMode === 'markdown' && !/\.(zip|tar|tar\.gz|tgz|md)$/i.test(uploadedFile.filename)) {
+    errors.push({ field: 'bundle', message: 'Markdown mode requires .zip, .tar, .tar.gz, .tgz, or .md.' });
   }
   return errors;
+}
+
+function resolvePresentationMode(fields, uploadedFile) {
+  const requested = parsePresentationMode(fields.presentationMode);
+  if (requested) return requested;
+  return /\.pptx$/i.test(uploadedFile?.filename ?? '') ? 'pptx' : 'markdown';
+}
+
+function parsePresentationMode(value) {
+  const mode = String(value ?? '').trim().toLowerCase();
+  if (!mode) return undefined;
+  if (mode === 'markdown' || mode === 'pptx') return mode;
+  return null;
 }
 
 function consumeRateLimit(ip) {
@@ -525,14 +546,17 @@ function hasGithubDispatchCredentials() {
 async function uploadSourceToArchive(publication) {
   const configFile = path.join(config.dataDir, 'ia.ini');
   await fs.writeFile(configFile, `[s3]\naccess = ${config.archiveAccessKey}\nsecret = ${config.archiveSecretKey}\n`, { mode: 0o600 });
+  const subject = publication.presentationMode === 'pptx'
+    ? 'prezenter;pptx;presentation'
+    : 'prezenter;markdown;revealjs;presentation';
 
   const metadata = [
-    `title:${publication.title} source bundle`,
+    `title:${publication.title} source`,
     `mediatype:data`,
     `creator:${config.archiveCreator}`,
     `language:${publication.language}`,
     `licenseurl:${publication.license}`,
-    `subject:prezenter;markdown;revealjs;presentation`
+    `subject:${subject}`
   ];
   if (config.archiveCollection) metadata.push(`collection:${config.archiveCollection}`);
 
@@ -568,6 +592,7 @@ async function dispatchGithubWorkflow(publication) {
           publication_id: publication.id,
           source_identifier: publication.sourceIdentifier,
           source_file: publication.sourceFile,
+          presentation_mode: publication.presentationMode,
           output_identifier: publication.outputIdentifier,
           callback_url: callbackUrl
         }
@@ -719,6 +744,7 @@ function summarizePublication(publication) {
     id: publication.id,
     createdAt: publication.createdAt,
     title: publication.title,
+    presentationMode: publication.presentationMode,
     sourceIdentifier: publication.sourceIdentifier,
     outputIdentifier: publication.outputIdentifier,
     roomId: publication.roomId
@@ -732,12 +758,14 @@ function clientPublication(publication) {
     updatedAt: publication.updatedAt,
     status: publication.status,
     title: publication.title,
+    presentationMode: publication.presentationMode,
     language: publication.language,
     license: publication.license,
     sourceIdentifier: publication.sourceIdentifier,
     sourceFile: publication.sourceFile,
     outputIdentifier: publication.outputIdentifier,
     resultUrl: publication.resultUrl,
+    accessibilityReport: publication.accessibilityReport,
     archiveIdentifier: publication.archiveIdentifier,
     roomId: publication.roomId,
     viewerUrl: publication.viewerUrl,

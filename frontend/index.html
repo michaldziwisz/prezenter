@@ -16,7 +16,7 @@
     <main>
       <section class="band">
         <div class="wrap intro">
-          <h1>Dostępne prezentacje Markdown</h1>
+          <h1>Dostępne prezentacje</h1>
           <p>Przygotuj paczkę prezentacji, sprawdź wymagane deklaracje i opublikuj ją publicznie.</p>
         </div>
       </section>
@@ -49,9 +49,21 @@
               <input id="license" name="license" type="text" required value="CC BY 4.0">
             </div>
 
+            <fieldset class="mode-options">
+              <legend>Format</legend>
+              <label class="mode-option">
+                <input name="presentationMode" type="radio" value="markdown" checked>
+                <span>Markdown / reveal.js</span>
+              </label>
+              <label class="mode-option">
+                <input name="presentationMode" type="radio" value="pptx">
+                <span>PPTX + PDF</span>
+              </label>
+            </fieldset>
+
             <div class="field">
               <label for="bundle">Paczka prezentacji</label>
-              <input id="bundle" name="bundle" type="file" required accept=".zip,.tar,.gz,.tgz,.md">
+              <input id="bundle" name="bundle" type="file" required accept=".zip,.tar,.gz,.tgz,.md" aria-describedby="bundle-hint">
               <p id="bundle-hint" class="hint">Obsługiwane: ZIP, TAR, TGZ albo pojedynczy plik Markdown.</p>
             </div>
 

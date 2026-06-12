@@ -12,6 +12,10 @@ on:
       source_file:
         required: true
         type: string
+      presentation_mode:
+        required: false
+        default: auto
+        type: string
       output_identifier:
         required: true
         type: string
@@ -44,6 +48,32 @@ jobs:
           EOF
           chmod 600 ~/.config/ia.ini
 
+      - name: Detect presentation mode
+        id: mode
+        run: |
+          mode="${{ inputs.presentation_mode }}"
+          source_file="${{ inputs.source_file }}"
+          lower_source_file="${source_file,,}"
+          if [ -z "$mode" ] || [ "$mode" = "auto" ]; then
+            case "$lower_source_file" in
+              *.pptx)
+                mode="pptx"
+                ;;
+              *)
+                mode="markdown"
+                ;;
+            esac
+          fi
+          case "$mode" in
+            markdown|pptx)
+              echo "presentation_mode=$mode" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "Unsupported presentation mode: $mode" >&2
+              exit 1
+              ;;
+          esac
+
       - name: Download source bundle
         run: |
           mkdir -p source bundle dist
@@ -64,26 +94,42 @@ jobs:
             echo "Downloaded source file is empty: $source_path" >&2
             exit 1
           fi
-          case "${{ inputs.source_file }}" in
-            *.zip)
+          mode="${{ steps.mode.outputs.presentation_mode }}"
+          source_file="${{ inputs.source_file }}"
+          lower_source_file="${source_file,,}"
+          case "$mode:$lower_source_file" in
+            markdown:*.zip)
               unzip -q "$source_path" -d source
               ;;
-            *.tar.gz|*.tgz)
+            markdown:*.tar.gz|markdown:*.tgz)
               tar -xzf "$source_path" -C source
               ;;
-            *.tar)
+            markdown:*.tar)
               tar -xf "$source_path" -C source
               ;;
-            *.md)
+            markdown:*.md)
               cp "$source_path" source/slides.md
               ;;
+            pptx:*.pptx)
+              cp "$source_path" source/presentation.pptx
+              ;;
+            pptx:*)
+              echo "PPTX mode requires a .pptx source file" >&2
+              exit 1
+              ;;
             *)
-              echo "Unsupported source file" >&2
+              echo "Unsupported Markdown source file" >&2
               exit 1
               ;;
           esac
 
+      - name: Install PPTX tools
+        if: ${{ steps.mode.outputs.presentation_mode == 'pptx' }}
+        run: |
+          sudo apt-get install -y libreoffice fonts-dejavu fonts-liberation
+
       - name: Build reveal.js HTML
+        if: ${{ steps.mode.outputs.presentation_mode == 'markdown' }}
         run: |
           slides="$(find source -maxdepth 3 -name 'slides.md' -print -quit)"
           if [ -z "$slides" ]; then
@@ -111,15 +157,125 @@ jobs:
           }
           EOF
 
+      - name: Build PPTX share page
+        if: ${{ steps.mode.outputs.presentation_mode == 'pptx' }}
+        env:
+          OUTPUT_IDENTIFIER: ${{ inputs.output_identifier }}
+          SOURCE_FILE: ${{ inputs.source_file }}
+        run: |
+          pptx="source/presentation.pptx"
+          if [ ! -s "$pptx" ]; then
+            echo "No PPTX source file found" >&2
+            exit 1
+          fi
+          cp "$pptx" dist/presentation.pptx
+          pdf_status="unavailable"
+          if libreoffice --headless --convert-to pdf --outdir dist "$pptx" && [ -s dist/presentation.pdf ]; then
+            pdf_status="created"
+          fi
+          PDF_STATUS="$pdf_status" python3 <<'PY'
+          import json
+          import os
+          from html import escape
+          from pathlib import Path
+
+          output_identifier = os.environ["OUTPUT_IDENTIFIER"]
+          source_file = os.environ["SOURCE_FILE"]
+          pdf_available = Path("dist/presentation.pdf").exists()
+          pdf_status = os.environ.get("PDF_STATUS", "unavailable")
+          pdf_link = '<li><a href="./presentation.pdf">Pobierz PDF</a></li>' if pdf_available else ''
+          preview = '<iframe src="./presentation.pdf" title="Podgląd PDF prezentacji"></iframe>' if pdf_available else ''
+          html = f"""<!doctype html>
+          <html lang="pl">
+            <head>
+              <meta charset="utf-8">
+              <meta name="viewport" content="width=device-width, initial-scale=1">
+              <title>{escape(output_identifier)} - PPTX</title>
+              <style>
+                :root {{
+                  color-scheme: light;
+                  --bg: #f7f7f4;
+                  --text: #181a1b;
+                  --line: #b7c1c8;
+                  --accent: #084d3f;
+                  --panel: #ffffff;
+                }}
+                * {{ box-sizing: border-box; }}
+                body {{
+                  margin: 0;
+                  background: var(--bg);
+                  color: var(--text);
+                  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+                  line-height: 1.5;
+                }}
+                main {{
+                  width: min(960px, calc(100% - 32px));
+                  margin: 0 auto;
+                  padding: 32px 0;
+                }}
+                h1 {{ margin: 0 0 12px; font-size: 2rem; line-height: 1.2; }}
+                a {{ color: var(--accent); font-weight: 700; }}
+                a:focus-visible {{ outline: 3px solid #b45309; outline-offset: 3px; }}
+                .panel {{
+                  border: 1px solid var(--line);
+                  border-radius: 8px;
+                  background: var(--panel);
+                  padding: 20px;
+                }}
+                iframe {{
+                  width: 100%;
+                  min-height: 72vh;
+                  border: 1px solid var(--line);
+                  border-radius: 6px;
+                  background: #ffffff;
+                }}
+              </style>
+            </head>
+            <body>
+              <main>
+                <h1>Prezentacja PPTX</h1>
+                <section class="panel" aria-labelledby="files-title">
+                  <h2 id="files-title">Pliki</h2>
+                  <ul>
+                    <li><a href="./presentation.pptx">Pobierz PPTX ({escape(source_file)})</a></li>
+                    {pdf_link}
+                  </ul>
+                  {preview}
+                </section>
+              </main>
+            </body>
+          </html>
+          """
+          Path("dist/index.html").write_text(html, encoding="utf-8")
+          report = {
+              "status": "pptx-share-complete",
+              "pdf": pdf_status,
+              "notes": [
+                  "Original PPTX was published.",
+                  "PDF preview was generated with LibreOffice." if pdf_available else "PDF preview could not be generated.",
+                  "PPTX accessibility requires manual author review."
+              ]
+          }
+          Path("dist/accessibility-report.json").write_text(
+              json.dumps(report, ensure_ascii=False, indent=2) + "\n",
+              encoding="utf-8"
+          )
+          PY
+
       - name: Upload build to Internet Archive
         run: |
+          mode="${{ steps.mode.outputs.presentation_mode }}"
+          if [ "$mode" = "pptx" ]; then
+            subject="prezenter;pptx;pdf;presentation"
+          else
+            subject="prezenter;markdown;revealjs;presentation"
+          fi
           ia upload "${{ inputs.output_identifier }}" \
-            dist/index.html \
-            dist/accessibility-report.json \
+            dist/* \
             --metadata "title:${{ inputs.output_identifier }} presentation" \
             --metadata "mediatype:data" \
             --metadata "creator:Prezenter" \
-            --metadata "subject:prezenter;markdown;revealjs;presentation" \
+            --metadata "subject:$subject" \
             --retries 3
 
       - name: Callback success

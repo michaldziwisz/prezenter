@@ -19,6 +19,7 @@ const stateH = document.querySelector('#state-h');
 const stateTotal = document.querySelector('#state-total');
 const prevSlideButton = document.querySelector('#prev-slide');
 const nextSlideButton = document.querySelector('#next-slide');
+const endRoomButton = document.querySelector('#end-room');
 
 const API_URL = 'https://api.prezenter.eu.org';
 
@@ -123,6 +124,7 @@ document.querySelector('#connect-presenter').addEventListener('click', () => con
 document.querySelector('#connect-viewer').addEventListener('click', () => connectLive(false));
 prevSlideButton.addEventListener('click', () => updateSlide({ indexh: slideIndex() - 1, fragment: -1 }));
 nextSlideButton.addEventListener('click', () => updateSlide({ indexh: slideIndex() + 1, fragment: -1 }));
+endRoomButton.addEventListener('click', endCurrentRoom);
 followPresenterInput.addEventListener('change', () => {
   followPresenter = followPresenterInput.checked;
   if (followPresenter && !presenter) {
@@ -203,6 +205,9 @@ async function connectLive(asPresenter) {
     const message = JSON.parse(event.data);
     if (message.type === 'room') {
       applyRoom(message.room);
+      if (message.room?.endedAt) {
+        setSyncStatus('Pokój został zakończony.');
+      }
       return;
     }
     if (message.type === 'state') {
@@ -289,6 +294,10 @@ function applyRoom(room) {
     const key = new URL(room.presenterUrl || window.location.href).hash.slice(1);
     presenterKeyInput.value = new URLSearchParams(key).get('presenterKey') || '';
   }
+  if (room.endedAt) {
+    renderEndedRoom(room);
+    return;
+  }
   renderPresentation(room.presentation);
 }
 
@@ -361,6 +370,53 @@ function renderPresentation(presentation) {
       presentationStatus.textContent = error.message || 'Nie udało się załadować slajdów.';
       updatePresenterControls();
     });
+}
+
+function renderEndedRoom(room) {
+  currentPresentation = null;
+  currentDeck = null;
+  deckLoadToken += 1;
+  clearPresentationStage();
+  presentationStatus.textContent = 'Pokój zakończony. Prezentacja nie jest już dostępna w tym pokoju.';
+  stateH.textContent = '0';
+  stateTotal.textContent = '0';
+  updatePresenterControls();
+  if (room.archiveDeletion?.some((entry) => entry.status === 'failed')) {
+    setSyncStatus('Pokój zakończony, ale nie wszystkie pliki Archive udało się usunąć.', true);
+  }
+}
+
+async function endCurrentRoom() {
+  if (!presenter || !currentRoom?.roomId || currentRoom.endedAt) return;
+  const presenterKey = presenterKeyInput.value.trim();
+  if (!presenterKey) {
+    setSyncStatus('Zakończenie pokoju wymaga tokenu prezentera.', true);
+    presenterKeyInput.focus();
+    return;
+  }
+
+  const confirmed = window.confirm('Zakończyć pokój i usunąć opublikowane pliki prezentacji?');
+  if (!confirmed) return;
+
+  endRoomButton.disabled = true;
+  setSyncStatus('Kończenie pokoju i usuwanie prezentacji...');
+  try {
+    const response = await fetch(`${API_URL}/api/rooms/${encodeURIComponent(currentRoom.roomId)}/end`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ presenterKey })
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || 'Nie udało się zakończyć pokoju.');
+    applyRoom(payload.room);
+    const failed = (payload.archiveDeletion || []).filter((entry) => entry.status === 'failed');
+    setSyncStatus(failed.length
+      ? 'Pokój zakończony, ale część plików Archive wymaga ręcznego sprawdzenia.'
+      : 'Pokój zakończony. Prezentacja została usunięta z pokoju.');
+  } catch (error) {
+    setSyncStatus(error.message, true);
+    updatePresenterControls();
+  }
 }
 
 async function loadPresentationDeck(presentation) {
@@ -591,13 +647,20 @@ function clearPresentationStage() {
 
 function updatePresenterControls() {
   const hasDeck = Boolean(currentDeck?.slides.length);
+  const roomOpen = !currentRoom?.endedAt;
   const canControl = hasDeck && (
-    (presenter && socket?.readyState === WebSocket.OPEN)
-    || (!presenter && !followPresenter)
+    (presenter && socket?.readyState === WebSocket.OPEN && roomOpen)
+    || (!presenter && !followPresenter && roomOpen)
   );
   const index = slideIndex();
   prevSlideButton.disabled = !canControl || index <= 0;
   nextSlideButton.disabled = !canControl || index >= (currentDeck?.slides.length ?? 0) - 1;
+  endRoomButton.disabled = !(
+    presenter
+    && socket?.readyState === WebSocket.OPEN
+    && currentRoom?.roomId
+    && roomOpen
+  );
   followPresenterInput.disabled = presenter;
   followPresenterInput.checked = followPresenter;
 }

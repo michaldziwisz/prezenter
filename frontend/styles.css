@@ -361,6 +361,15 @@ button:hover {
   background: var(--accent-dark);
 }
 
+.danger-button {
+  border-color: var(--danger-text);
+  background: var(--danger-text);
+}
+
+.danger-button:hover {
+  background: #7f1d1d;
+}
+
 button:disabled {
   border-color: #8b949e;
   background: #8b949e;

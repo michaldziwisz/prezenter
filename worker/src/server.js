@@ -111,6 +111,28 @@ app.get('/api/rooms/:roomId', async (request, reply) => {
   return publicRoom(hydrated, { includePresenter: false });
 });
 
+app.post('/api/rooms/:roomId/end', async (request, reply) => {
+  const room = rooms.get(request.params.roomId);
+  if (!room) {
+    reply.code(404);
+    return { error: 'room_not_found' };
+  }
+
+  const body = parseJsonBody(request.body);
+  const token = String(body.presenterKey ?? '') || readBearer(request.headers.authorization);
+  if (!verifyPresenterToken(room, token)) {
+    reply.code(401);
+    return { error: 'unauthorized' };
+  }
+
+  const ended = await endRoom(room);
+  return {
+    ok: true,
+    room: publicRoom(ended, { includePresenter: false }),
+    archiveDeletion: ended.archiveDeletion ?? []
+  };
+});
+
 app.post('/api/publish', async (request, reply) => {
   const ip = request.ip;
   if (!consumeRateLimit(ip)) {
@@ -352,6 +374,12 @@ wss.on('connection', async (ws) => {
       return;
     }
 
+    room = rooms.get(ws.roomId) ?? room;
+    if (room.endedAt) {
+      ws.send(JSON.stringify({ type: 'error', error: 'room_is_ended' }));
+      return;
+    }
+
     const nextState = sanitizeSlideState(message.state);
     room.state = { ...room.state, ...nextState, updatedAt: new Date().toISOString() };
     await persistRoom(room);
@@ -541,6 +569,8 @@ function publicRoom(room, options = {}) {
   return {
     roomId: room.roomId,
     title: room.title,
+    status: room.endedAt ? 'ended' : 'open',
+    endedAt: room.endedAt,
     publicationId: room.publicationId ?? room.presentation?.publicationId,
     presentationMode: room.presentationMode ?? room.presentation?.presentationMode,
     presentation: room.presentation ? publicPresentation(room.presentation) : null,
@@ -553,6 +583,7 @@ function publicRoom(room, options = {}) {
 
 async function hydrateRoomPresentation(room) {
   if (!room) return room;
+  if (room.endedAt) return room;
   if (room.presentation?.resultUrl || room.presentation?.status === 'failed') return room;
 
   const publication = room.publicationId
@@ -583,6 +614,7 @@ async function syncRoomPresentation(publication, options = {}) {
   const existing = rooms.get(publication.roomId)
     ?? await readJson(path.join(dirs.rooms, `${publication.roomId}.json`));
   if (!existing) return null;
+  if (existing.endedAt) return existing;
 
   const now = new Date().toISOString();
   const updated = {
@@ -610,6 +642,46 @@ async function syncRoomPresentation(publication, options = {}) {
     broadcastRoom(updated.roomId, { type: 'room', room: publicRoom(updated, { includePresenter: false }) });
   }
   return updated;
+}
+
+async function endRoom(room) {
+  if (room.endedAt) return room;
+
+  const now = new Date().toISOString();
+  const publication = room.publicationId
+    ? await readPublication(room.publicationId)
+    : await findPublicationByRoomId(room.roomId);
+  const archiveDeletion = publication
+    ? await deletePublicationArchiveItems(publication)
+    : [];
+  const failedDeletion = archiveDeletion.some((entry) => entry.status === 'failed');
+
+  if (publication) {
+    await updatePublication(publication.id, {
+      status: failedDeletion ? 'delete_failed' : 'deleted',
+      deletedAt: now,
+      archiveDeletion
+    });
+  }
+
+  const ended = {
+    ...room,
+    status: 'ended',
+    endedAt: now,
+    archiveDeletion,
+    presentation: null,
+    updatedAt: now
+  };
+  rooms.set(ended.roomId, ended);
+  await persistRoom(ended);
+  broadcastRoom(ended.roomId, { type: 'room', room: publicRoom(ended, { includePresenter: false }) });
+  await appendLog('events.jsonl', {
+    roomId: ended.roomId,
+    publicationId: publication?.id,
+    at: now,
+    patch: { status: 'room_ended', archiveDeletion }
+  });
+  return ended;
 }
 
 function verifyPresenterToken(room, token) {
@@ -731,6 +803,48 @@ async function uploadSourceToArchive(publication) {
   for (const entry of metadata) args.push('--metadata', entry);
 
   await runCommand('ia', args, { cwd: config.dataDir });
+}
+
+async function deletePublicationArchiveItems(publication) {
+  if (!config.archiveAccessKey || !config.archiveSecretKey) {
+    return [{
+      identifier: '',
+      kind: 'archive',
+      status: 'skipped',
+      reason: 'archive_credentials_not_configured'
+    }];
+  }
+
+  const targets = [
+    { kind: 'source', identifier: publication.sourceIdentifier },
+    { kind: 'output', identifier: publication.archiveIdentifier || publication.outputIdentifier }
+  ].filter((target, index, all) => (
+    isSafeArchiveIdentifier(String(target.identifier ?? ''))
+    && all.findIndex((item) => item.identifier === target.identifier) === index
+  ));
+
+  const configFile = path.join(config.dataDir, 'ia.ini');
+  await fs.writeFile(configFile, `[s3]\naccess = ${config.archiveAccessKey}\nsecret = ${config.archiveSecretKey}\n`, { mode: 0o600 });
+
+  const results = [];
+  for (const target of targets) {
+    try {
+      await runCommand('ia', [
+        '--config-file', configFile,
+        'delete',
+        target.identifier,
+        '--all',
+        '--no-backup',
+        '--retries', '3'
+      ], { cwd: config.dataDir });
+      results.push({ ...target, status: 'deleted' });
+    } catch (error) {
+      app.log.warn({ error, target }, 'archive item deletion failed');
+      results.push({ ...target, status: 'failed', error: error.message });
+    }
+  }
+
+  return results;
 }
 
 async function dispatchGithubWorkflow(publication) {

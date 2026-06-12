@@ -35,7 +35,7 @@ jobs:
           sudo apt-get install -y pandoc unzip python3-pip
           python3 -m venv "$RUNNER_TEMP/ia-venv"
           "$RUNNER_TEMP/ia-venv/bin/pip" install --upgrade pip
-          "$RUNNER_TEMP/ia-venv/bin/pip" install internetarchive
+          "$RUNNER_TEMP/ia-venv/bin/pip" install internetarchive python-pptx
           echo "$RUNNER_TEMP/ia-venv/bin" >> "$GITHUB_PATH"
 
       - name: Configure Internet Archive
@@ -210,20 +210,120 @@ jobs:
           import os
           from html import escape
           from pathlib import Path
+          from pptx import Presentation
 
           output_identifier = os.environ["OUTPUT_IDENTIFIER"]
           source_file = os.environ["SOURCE_FILE"]
           pdf_available = Path("dist/presentation.pdf").exists()
+
           def slide_number(path):
               return int(path.stem.rsplit("-", 1)[1])
 
           slide_images = sorted(Path("dist").glob("slide-*.png"), key=slide_number)
           pdf_status = os.environ.get("PDF_STATUS", "unavailable")
           pdf_link = '<li><a href="./presentation.pdf">Pobierz PDF</a></li>' if pdf_available else ''
-          slide_sections = "\n".join(
-              f'        <section><img src="./{escape(image.name)}" alt="Slajd {index} prezentacji"></section>'
-              for index, image in enumerate(slide_images, start=1)
-          )
+
+          def text_runs(paragraph):
+              text = "".join(run.text for run in paragraph.runs).strip()
+              return text or paragraph.text.strip()
+
+          def text_blocks(shape):
+              if not getattr(shape, "has_text_frame", False):
+                  return []
+              blocks = []
+              for paragraph in shape.text_frame.paragraphs:
+                  text = " ".join(text_runs(paragraph).split())
+                  if text:
+                      blocks.append({"text": text, "level": paragraph.level})
+              return blocks
+
+          def table_block(shape):
+              if not getattr(shape, "has_table", False):
+                  return None
+              rows = []
+              for row in shape.table.rows:
+                  cells = [" ".join(cell.text.split()) for cell in row.cells]
+                  if any(cells):
+                      rows.append(cells)
+              return {"type": "table", "rows": rows} if rows else None
+
+          def render_table(rows):
+              body = "\n".join(
+                  "              <tr>" + "".join(f"<td>{escape(cell)}</td>" for cell in row) + "</tr>"
+                  for row in rows
+              )
+              return f'            <table><tbody>\n{body}\n            </tbody></table>'
+
+          presentation = Presentation("source/presentation.pptx")
+          slide_models = []
+          manual_review_slides = []
+          for index, slide in enumerate(presentation.slides, start=1):
+              title_shape = slide.shapes.title
+              title = ""
+              paragraphs = []
+              tables = []
+              non_text_shapes = 0
+
+              for shape in slide.shapes:
+                  if getattr(shape, "has_text_frame", False):
+                      blocks = text_blocks(shape)
+                      if blocks and title_shape is not None and shape == title_shape:
+                          title = title or blocks[0]["text"]
+                          paragraphs.extend(blocks[1:])
+                      elif blocks and not title:
+                          title = blocks[0]["text"]
+                          paragraphs.extend(blocks[1:])
+                      else:
+                          paragraphs.extend(blocks)
+                  elif getattr(shape, "has_table", False):
+                      block = table_block(shape)
+                      if block:
+                          tables.append(block)
+                  else:
+                      non_text_shapes += 1
+
+              if not title:
+                  title = f"Slajd {index}"
+              if non_text_shapes:
+                  manual_review_slides.append(index)
+              slide_models.append({
+                  "index": index,
+                  "title": title,
+                  "paragraphs": paragraphs,
+                  "tables": tables,
+                  "nonTextShapes": non_text_shapes
+              })
+
+          image_by_index = {slide_number(image): image for image in slide_images}
+          sections = []
+          for model in slide_models:
+              index = model["index"]
+              image = image_by_index.get(index)
+              visual = (
+                  f'          <figure class="slide-visual" aria-hidden="true">'
+                  f'<img src="./{escape(image.name)}" alt=""></figure>'
+                  if image else
+                  '          <div class="slide-visual-missing" aria-hidden="true"></div>'
+              )
+              paragraphs = "\n".join(
+                  f'              <p class="indent-{min(block["level"], 4)}">{escape(block["text"])}</p>'
+                  for block in model["paragraphs"]
+              )
+              tables = "\n".join(render_table(block["rows"]) for block in model["tables"])
+              body = paragraphs + ("\n" if paragraphs and tables else "") + tables
+              if not body:
+                  body = '              <p>Brak tekstu możliwego do automatycznego wyciągnięcia z tego slajdu.</p>'
+              sections.append(f"""        <section aria-labelledby="slide-title-{index}">
+                  <div class="slide-grid">
+          {visual}
+                    <div class="slide-text">
+                      <h2 id="slide-title-{index}">{escape(model["title"])}</h2>
+          {body}
+                    </div>
+                  </div>
+                </section>""")
+
+          slide_sections = "\n".join(sections)
           if not slide_sections:
               slide_sections = '        <section><p>Nie udało się wygenerować podglądu slajdów.</p></section>'
           html = f"""<!doctype html>
@@ -245,7 +345,18 @@ jobs:
                 .reveal .slides section {{
                   height: 100%;
                 }}
-                .reveal .slides img {{
+                .slide-grid {{
+                  display: grid;
+                  grid-template-columns: minmax(0, 2fr) minmax(18rem, 1fr);
+                  gap: 1.25rem;
+                  align-items: center;
+                  width: 100%;
+                  height: 100%;
+                }}
+                .slide-visual {{
+                  margin: 0;
+                }}
+                .slide-visual img {{
                   display: block;
                   max-width: 100%;
                   max-height: 82vh;
@@ -253,6 +364,39 @@ jobs:
                   border: 0;
                   box-shadow: none;
                   object-fit: contain;
+                }}
+                .slide-text {{
+                  max-height: 80vh;
+                  overflow: auto;
+                  padding: 1rem;
+                  border-left: 0.2rem solid var(--accent);
+                  background: #ffffff;
+                  color: #181a1b;
+                  text-align: left;
+                  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+                  font-size: clamp(1rem, 1.8vw, 1.55rem);
+                  line-height: 1.45;
+                }}
+                .slide-text h2 {{
+                  margin: 0 0 0.75rem;
+                  font-size: 1.25em;
+                  line-height: 1.2;
+                }}
+                .slide-text p {{
+                  margin: 0.45rem 0;
+                }}
+                .slide-text .indent-1 {{ margin-left: 1rem; }}
+                .slide-text .indent-2 {{ margin-left: 2rem; }}
+                .slide-text .indent-3 {{ margin-left: 3rem; }}
+                .slide-text .indent-4 {{ margin-left: 4rem; }}
+                .slide-text table {{
+                  width: 100%;
+                  border-collapse: collapse;
+                  font-size: 0.85em;
+                }}
+                .slide-text td {{
+                  border: 1px solid #66717a;
+                  padding: 0.35rem;
                 }}
                 .download-links {{
                   position: fixed;
@@ -269,6 +413,18 @@ jobs:
                   font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
                   font-size: 0.95rem;
                   list-style: none;
+                }}
+                @media (max-width: 900px) {{
+                  .slide-grid {{
+                    grid-template-columns: 1fr;
+                    align-content: center;
+                  }}
+                  .slide-visual img {{
+                    max-height: 52vh;
+                  }}
+                  .slide-text {{
+                    max-height: 30vh;
+                  }}
                 }}
               </style>
             </head>
@@ -300,11 +456,14 @@ jobs:
               "status": "pptx-share-complete",
               "pdf": pdf_status,
               "slideImages": len(slide_images),
+              "textSlides": sum(1 for slide in slide_models if slide["paragraphs"] or slide["tables"]),
+              "manualReviewSlides": manual_review_slides,
               "notes": [
                   "Original PPTX was published.",
-                  "PPTX slides were rendered as images and wrapped in reveal.js." if slide_images else "Slide image preview could not be generated.",
+                  "PPTX slides were rendered as visual previews and wrapped in reveal.js." if slide_images else "Slide image preview could not be generated.",
+                  "Extracted PPTX text is exposed as semantic HTML next to each visual slide.",
                   "PDF was generated with LibreOffice." if pdf_available else "PDF could not be generated.",
-                  "PPTX accessibility requires manual author review."
+                  "Slides with images, charts, icons, or other non-text content still require manual accessibility review."
               ]
           }
           Path("dist/accessibility-report.json").write_text(

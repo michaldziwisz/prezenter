@@ -393,7 +393,7 @@ function getPresentationMode() {
 }
 
 function formatPresentationMode(mode) {
-  if (mode === 'pptx') return 'PPTX + PDF';
+  if (mode === 'pptx') return 'PPTX / HTML';
   return 'Markdown / reveal.js';
 }
 

@@ -47,21 +47,35 @@ jobs:
       - name: Download source bundle
         run: |
           mkdir -p source bundle dist
-          curl -fsSL \
-            "https://archive.org/download/${{ inputs.source_identifier }}/${{ inputs.source_file }}" \
-            -o "bundle/${{ inputs.source_file }}"
+          source_url="https://archive.org/download/${{ inputs.source_identifier }}/${{ inputs.source_file }}"
+          source_path="bundle/${{ inputs.source_file }}"
+          for attempt in $(seq 1 30); do
+            if curl -fsSL "$source_url" -o "$source_path"; then
+              break
+            fi
+            if [ "$attempt" -eq 30 ]; then
+              echo "Source file was not available after $attempt attempts: $source_url" >&2
+              exit 1
+            fi
+            echo "Source file is not available yet; retrying in 10 seconds ($attempt/30)."
+            sleep 10
+          done
+          if [ ! -s "$source_path" ]; then
+            echo "Downloaded source file is empty: $source_path" >&2
+            exit 1
+          fi
           case "${{ inputs.source_file }}" in
             *.zip)
-              unzip -q "bundle/${{ inputs.source_file }}" -d source
+              unzip -q "$source_path" -d source
               ;;
             *.tar.gz|*.tgz)
-              tar -xzf "bundle/${{ inputs.source_file }}" -C source
+              tar -xzf "$source_path" -C source
               ;;
             *.tar)
-              tar -xf "bundle/${{ inputs.source_file }}" -C source
+              tar -xf "$source_path" -C source
               ;;
             *.md)
-              cp "bundle/${{ inputs.source_file }}" source/slides.md
+              cp "$source_path" source/slides.md
               ;;
             *)
               echo "Unsupported source file" >&2

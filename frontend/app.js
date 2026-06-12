@@ -1,7 +1,6 @@
 const publishForm = document.querySelector('#publish-form');
 const statusBox = document.querySelector('#status');
 const details = document.querySelector('#publication-details');
-const apiUrlInput = document.querySelector('#api-url');
 const bundleInput = document.querySelector('#bundle');
 const bundleHint = document.querySelector('#bundle-hint');
 const modeInputs = [...document.querySelectorAll('input[name="presentationMode"]')];
@@ -12,7 +11,6 @@ const slideVisual = document.querySelector('#slide-visual');
 const slideImage = document.querySelector('#slide-image');
 const slideText = document.querySelector('#slide-text');
 
-const roomApiUrl = document.querySelector('#room-api-url');
 const roomIdInput = document.querySelector('#room-id');
 const presenterKeyInput = document.querySelector('#presenter-key');
 const syncStatus = document.querySelector('#sync-status');
@@ -20,6 +18,8 @@ const stateH = document.querySelector('#state-h');
 const stateTotal = document.querySelector('#state-total');
 const prevSlideButton = document.querySelector('#prev-slide');
 const nextSlideButton = document.querySelector('#next-slide');
+
+const API_URL = 'https://api.prezenter.eu.org';
 
 let socket;
 let presenter = false;
@@ -76,7 +76,7 @@ publishForm.addEventListener('submit', async (event) => {
   setFormDisabled(true);
 
   try {
-    const response = await fetch(`${normalizeUrl(apiUrlInput.value)}/api/publish`, {
+    const response = await fetch(`${API_URL}/api/publish`, {
       method: 'POST',
       body: formData
     });
@@ -97,7 +97,7 @@ publishForm.addEventListener('submit', async (event) => {
 document.querySelector('#create-room').addEventListener('click', async () => {
   setSyncStatus('Tworzenie pokoju...');
   try {
-    const response = await fetch(`${normalizeUrl(roomApiUrl.value)}/api/rooms`, {
+    const response = await fetch(`${API_URL}/api/rooms`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title: 'Prezentacja' })
@@ -120,7 +120,7 @@ async function pollStatus(publicationId) {
   for (let index = 0; index < 120; index += 1) {
     await wait(5000);
     try {
-      const response = await fetch(`${normalizeUrl(apiUrlInput.value)}/api/publications/${publicationId}/status`);
+      const response = await fetch(`${API_URL}/api/publications/${publicationId}/status`);
       const payload = await response.json();
       if (response.ok) {
         setStatus(`Status: ${payload.status}.`);
@@ -151,7 +151,6 @@ async function connectLive(asPresenter) {
   presenter = asPresenter;
   updatePresenterControls();
 
-  const apiUrl = normalizeUrl(roomApiUrl.value);
   try {
     await loadRoom(roomId);
   } catch (error) {
@@ -160,7 +159,7 @@ async function connectLive(asPresenter) {
     return;
   }
 
-  const wsBase = apiUrl.replace(/^http/, 'ws');
+  const wsBase = API_URL.replace(/^http/, 'ws');
   const url = new URL(`${wsBase}/ws/live`);
   url.searchParams.set('room', roomId);
   url.searchParams.set('role', asPresenter ? 'presenter' : 'viewer');
@@ -239,7 +238,7 @@ async function loadInitialRoom() {
 }
 
 async function loadRoom(roomId) {
-  const response = await fetch(`${normalizeUrl(roomApiUrl.value)}/api/rooms/${encodeURIComponent(roomId)}`);
+  const response = await fetch(`${API_URL}/api/rooms/${encodeURIComponent(roomId)}`);
   const room = await response.json();
   if (!response.ok) throw new Error(room.error || 'Nie udało się pobrać pokoju.');
   applyRoom(room);
@@ -747,10 +746,6 @@ function setFormDisabled(disabled) {
   publishForm.querySelectorAll('button, input, select').forEach((element) => {
     element.disabled = disabled;
   });
-}
-
-function normalizeUrl(value) {
-  return value.replace(/\/+$/, '');
 }
 
 function wait(ms) {

@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Prezenter</title>
-    <link rel="stylesheet" href="./styles.css?v=20260612-media-players">
+    <link rel="stylesheet" href="./styles.css?v=20260612-fixed-api">
   </head>
   <body>
     <header class="site-header">
@@ -25,11 +25,6 @@
         <div class="wrap layout">
           <form id="publish-form" class="panel" novalidate>
             <h2>Publikacja</h2>
-
-            <div class="field">
-              <label for="api-url">Adres API</label>
-              <input id="api-url" name="apiUrl" type="url" required autocomplete="url" value="https://api.prezenter.eu.org">
-            </div>
 
             <div class="field">
               <label for="title">Tytuł prezentacji</label>
@@ -119,11 +114,6 @@
               <h2 id="room-title">Tryb prezentera</h2>
 
               <div class="field">
-                <label for="room-api-url">Adres API</label>
-                <input id="room-api-url" type="url" value="https://api.prezenter.eu.org">
-              </div>
-
-              <div class="field">
                 <label for="room-id">Pokój</label>
                 <input id="room-id" type="text" autocomplete="off">
               </div>
@@ -165,6 +155,6 @@
       </section>
     </main>
 
-    <script src="./app.js?v=20260612-media-players" type="module"></script>
+    <script src="./app.js?v=20260612-fixed-api" type="module"></script>
   </body>
 </html>

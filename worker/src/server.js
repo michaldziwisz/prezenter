@@ -275,6 +275,9 @@ app.post('/api/github/callback', async (request, reply) => {
     accessibilityReport: body.accessibilityReport
       ? presentationAssetUrl(archiveIdentifier, 'accessibility-report.json') || body.accessibilityReport
       : body.accessibilityReport,
+    slidesUrl: body.slidesUrl
+      ? presentationAssetUrl(archiveIdentifier, 'slides.json') || body.slidesUrl
+      : presentationAssetUrl(archiveIdentifier, 'slides.json'),
     callback: body
   });
 
@@ -587,6 +590,7 @@ async function syncRoomPresentation(publication, options = {}) {
       status: publication.status,
       resultUrl: publication.resultUrl ? publicResultUrl(publication) : publication.resultUrl,
       accessibilityReport: publication.accessibilityReport ? publicAccessibilityReportUrl(publication) : publication.accessibilityReport,
+      slidesUrl: publicSlidesUrl(publication),
       archiveIdentifier: publication.archiveIdentifier,
       updatedAt: publication.updatedAt ?? now
     },
@@ -916,6 +920,7 @@ function clientPublication(publication) {
     outputIdentifier: publication.outputIdentifier,
     resultUrl: publication.resultUrl ? publicResultUrl(publication) : publication.resultUrl,
     accessibilityReport: publication.accessibilityReport ? publicAccessibilityReportUrl(publication) : publication.accessibilityReport,
+    slidesUrl: publicSlidesUrl(publication),
     archiveIdentifier: publication.archiveIdentifier,
     roomId: publication.roomId,
     viewerUrl: publication.viewerUrl,
@@ -933,7 +938,8 @@ function publicPresentation(presentation) {
     resultUrl: presentation.resultUrl ? publicResultUrl(presentation) : presentation.resultUrl,
     accessibilityReport: presentation.accessibilityReport
       ? publicAccessibilityReportUrl(presentation)
-      : presentation.accessibilityReport
+      : presentation.accessibilityReport,
+    slidesUrl: publicSlidesUrl(presentation)
   };
 }
 
@@ -947,9 +953,15 @@ function publicAccessibilityReportUrl(value) {
   return presentationAssetUrl(identifier, 'accessibility-report.json') || value.accessibilityReport;
 }
 
+function publicSlidesUrl(value) {
+  const identifier = archiveIdentifierFor(value);
+  return presentationAssetUrl(identifier, 'slides.json') || value.slidesUrl;
+}
+
 function archiveIdentifierFor(value) {
   return value.archiveIdentifier
     || value.outputIdentifier
+    || archiveIdentifierFromUrl(value.slidesUrl)
     || archiveIdentifierFromUrl(value.resultUrl)
     || archiveIdentifierFromUrl(value.accessibilityReport)
     || '';

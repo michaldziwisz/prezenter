@@ -221,7 +221,6 @@ jobs:
 
           slide_images = sorted(Path("dist").glob("slide-*.png"), key=slide_number)
           pdf_status = os.environ.get("PDF_STATUS", "unavailable")
-          pdf_link = '<li><a href="./presentation.pdf">Pobierz PDF</a></li>' if pdf_available else ''
 
           def text_runs(paragraph):
               text = "".join(run.text for run in paragraph.runs).strip()
@@ -295,6 +294,28 @@ jobs:
               })
 
           image_by_index = {slide_number(image): image for image in slide_images}
+          slides_payload = {
+              "version": 1,
+              "format": "pptx",
+              "title": output_identifier,
+              "sourceFile": source_file,
+              "slides": []
+          }
+          for model in slide_models:
+              image = image_by_index.get(model["index"])
+              slides_payload["slides"].append({
+                  "index": model["index"],
+                  "title": model["title"],
+                  "image": f"./{image.name}" if image else None,
+                  "paragraphs": model["paragraphs"],
+                  "tables": model["tables"],
+                  "nonTextShapes": model["nonTextShapes"]
+              })
+          Path("dist/slides.json").write_text(
+              json.dumps(slides_payload, ensure_ascii=False, indent=2) + "\n",
+              encoding="utf-8"
+          )
+
           sections = []
           for model in slide_models:
               index = model["index"]
@@ -398,22 +419,6 @@ jobs:
                   border: 1px solid #66717a;
                   padding: 0.35rem;
                 }}
-                .download-links {{
-                  position: fixed;
-                  z-index: 20;
-                  top: 0.75rem;
-                  left: 0.75rem;
-                  display: flex;
-                  flex-wrap: wrap;
-                  gap: 0.75rem;
-                  margin: 0;
-                  padding: 0.5rem 0.75rem;
-                  border-radius: 6px;
-                  background: rgba(255, 255, 255, 0.92);
-                  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-                  font-size: 0.95rem;
-                  list-style: none;
-                }}
                 @media (max-width: 900px) {{
                   .slide-grid {{
                     grid-template-columns: 1fr;
@@ -429,10 +434,6 @@ jobs:
               </style>
             </head>
             <body>
-              <ul class="download-links" aria-label="Pliki prezentacji">
-                <li><a href="./presentation.pptx">Pobierz PPTX ({escape(source_file)})</a></li>
-                {pdf_link}
-              </ul>
               <div class="reveal">
                 <div class="slides">
           {slide_sections}
@@ -442,8 +443,8 @@ jobs:
               <script>
                 Reveal.initialize({{
                   hash: true,
-                  controls: true,
-                  progress: true,
+                  controls: false,
+                  progress: false,
                   transition: "none",
                   backgroundTransition: "none"
                 }});
@@ -460,8 +461,9 @@ jobs:
               "manualReviewSlides": manual_review_slides,
               "notes": [
                   "Original PPTX was published.",
-                  "PPTX slides were rendered as visual previews and wrapped in reveal.js." if slide_images else "Slide image preview could not be generated.",
+                  "PPTX slides were exported as structured slide data and visual previews." if slide_images else "Slide image preview could not be generated.",
                   "Extracted PPTX text is exposed as semantic HTML next to each visual slide.",
+                  "slides.json contains the primary synchronized presentation data for the Prezenter frontend.",
                   "PDF was generated with LibreOffice." if pdf_available else "PDF could not be generated.",
                   "Slides with images, charts, icons, or other non-text content still require manual accessibility review."
               ]
@@ -476,7 +478,7 @@ jobs:
         run: |
           mode="${{ steps.mode.outputs.presentation_mode }}"
           if [ "$mode" = "pptx" ]; then
-            subject="prezenter;pptx;revealjs;presentation"
+            subject="prezenter;pptx;slides;presentation"
           else
             subject="prezenter;markdown;revealjs;presentation"
           fi
@@ -493,18 +495,31 @@ jobs:
         run: |
           result_base="${{ inputs.callback_url }}"
           result_base="${result_base%/api/github/callback}"
+          RESULT_BASE="$result_base" \
+          MODE="${{ steps.mode.outputs.presentation_mode }}" \
+          PUBLICATION_ID="${{ inputs.publication_id }}" \
+          OUTPUT_IDENTIFIER="${{ inputs.output_identifier }}" \
+          python3 > callback-success.json <<'PY'
+          import json
+          import os
+
+          base = os.environ["RESULT_BASE"].rstrip("/")
+          output_identifier = os.environ["OUTPUT_IDENTIFIER"]
+          payload = {
+              "publicationId": os.environ["PUBLICATION_ID"],
+              "status": "published",
+              "archiveIdentifier": output_identifier,
+              "resultUrl": f"{base}/api/presentations/{output_identifier}/index.html",
+              "accessibilityReport": f"{base}/api/presentations/{output_identifier}/accessibility-report.json"
+          }
+          if os.environ["MODE"] == "pptx":
+              payload["slidesUrl"] = f"{base}/api/presentations/{output_identifier}/slides.json"
+          print(json.dumps(payload, ensure_ascii=False))
+          PY
           curl -fsS -X POST "${{ inputs.callback_url }}" \
             -H "Content-Type: application/json" \
             -H "X-Prezenter-Callback-Secret: ${{ secrets.CALLBACK_SECRET }}" \
-            --data @- <<EOF
-          {
-            "publicationId": "${{ inputs.publication_id }}",
-            "status": "published",
-            "archiveIdentifier": "${{ inputs.output_identifier }}",
-            "resultUrl": "${result_base}/api/presentations/${{ inputs.output_identifier }}/index.html",
-            "accessibilityReport": "${result_base}/api/presentations/${{ inputs.output_identifier }}/accessibility-report.json"
-          }
-          EOF
+            --data @callback-success.json
 
       - name: Callback failure
         if: failure()

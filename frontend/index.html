@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Prezenter</title>
-    <link rel="stylesheet" href="./styles.css?v=20260612-pptx-accessible">
+    <link rel="stylesheet" href="./styles.css?v=20260612-slide-renderer">
   </head>
   <body>
     <header class="site-header">
@@ -53,7 +53,7 @@
               <legend>Format</legend>
               <label class="mode-option">
                 <input name="presentationMode" type="radio" value="markdown" checked>
-                <span>Markdown / reveal.js</span>
+                <span>Markdown / HTML</span>
               </label>
               <label class="mode-option">
                 <input name="presentationMode" type="radio" value="pptx">
@@ -99,10 +99,19 @@
           <section class="panel presentation-panel" aria-labelledby="presentation-title">
             <div class="presentation-heading">
               <h2 id="presentation-title">Prezentacja</h2>
-              <a id="presentation-open" href="#" target="_blank" rel="noopener" hidden>Otwórz w nowej karcie</a>
             </div>
             <div id="presentation-status" class="status" aria-live="polite" aria-atomic="true">Brak prezentacji przypiętej do pokoju.</div>
-            <iframe id="presentation-frame" title="Podgląd prezentacji" loading="lazy" hidden></iframe>
+            <div id="presentation-stage" class="presentation-stage" hidden>
+              <section id="slide-region" class="slide-region" aria-live="polite" aria-atomic="true" aria-labelledby="slide-title">
+                <p id="slide-counter" class="slide-counter"></p>
+                <div class="slide-layout">
+                  <figure id="slide-visual" class="slide-visual" aria-hidden="true" hidden>
+                    <img id="slide-image" alt="">
+                  </figure>
+                  <div id="slide-text" class="slide-text"></div>
+                </div>
+              </section>
+            </div>
           </section>
 
           <div class="layout">
@@ -130,11 +139,10 @@
                 <button id="connect-viewer" type="button">Połącz jako widz</button>
               </div>
 
-              <div class="controls" aria-labelledby="slide-controls-title">
+              <div id="presenter-controls" class="controls" aria-labelledby="slide-controls-title">
                 <h3 id="slide-controls-title">Sterowanie</h3>
-                <button id="prev-slide" type="button">Poprzedni slajd</button>
-                <button id="next-slide" type="button">Następny slajd</button>
-                <button id="toggle-pause" type="button" aria-pressed="false">Pauza</button>
+                <button id="prev-slide" type="button" disabled>Poprzedni slajd</button>
+                <button id="next-slide" type="button" disabled>Następny slajd</button>
               </div>
             </section>
 
@@ -143,20 +151,12 @@
               <div id="sync-status" class="status" aria-live="polite" aria-atomic="true">Nie połączono.</div>
               <dl class="details">
                 <div>
-                  <dt>Slajd poziomy</dt>
+                  <dt>Slajd</dt>
                   <dd id="state-h">0</dd>
                 </div>
                 <div>
-                  <dt>Slajd pionowy</dt>
-                  <dd id="state-v">0</dd>
-                </div>
-                <div>
-                  <dt>Fragment</dt>
-                  <dd id="state-fragment">-1</dd>
-                </div>
-                <div>
-                  <dt>Pauza</dt>
-                  <dd id="state-paused">nie</dd>
+                  <dt>Liczba slajdów</dt>
+                  <dd id="state-total">0</dd>
                 </div>
               </dl>
             </section>
@@ -165,6 +165,6 @@
       </section>
     </main>
 
-    <script src="./app.js?v=20260612-pptx-accessible" type="module"></script>
+    <script src="./app.js?v=20260612-slide-renderer" type="module"></script>
   </body>
 </html>

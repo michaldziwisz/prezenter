@@ -77,19 +77,50 @@ jobs:
       - name: Download source bundle
         run: |
           mkdir -p source bundle dist
-          source_url="https://archive.org/download/${{ inputs.source_identifier }}/${{ inputs.source_file }}"
           source_path="bundle/${{ inputs.source_file }}"
-          for attempt in $(seq 1 30); do
-            if curl -fsSL "$source_url" -o "$source_path"; then
-              break
-            fi
-            if [ "$attempt" -eq 30 ]; then
-              echo "Source file was not available after $attempt attempts: $source_url" >&2
-              exit 1
-            fi
-            echo "Source file is not available yet; retrying in 10 seconds ($attempt/30)."
-            sleep 10
-          done
+          SOURCE_IDENTIFIER="${{ inputs.source_identifier }}" \
+          SOURCE_FILE="${{ inputs.source_file }}" \
+          python3 <<'PY'
+          import os
+          import time
+          from pathlib import Path
+          from internetarchive import get_item
+
+          identifier = os.environ["SOURCE_IDENTIFIER"]
+          source_file = os.environ["SOURCE_FILE"]
+          source_path = Path("bundle") / source_file
+          attempts = 60
+
+          for attempt in range(1, attempts + 1):
+              if source_path.exists():
+                  source_path.unlink()
+              try:
+                  item = get_item(identifier)
+                  item.get_file(source_file).download(
+                      destdir="bundle",
+                      ignore_existing=False,
+                      retries=3,
+                      timeout=60
+                  )
+                  if source_path.exists() and source_path.stat().st_size > 0:
+                      print(f"Downloaded {source_file} from {identifier}.")
+                      break
+                  last_error = "downloaded file is missing or empty"
+              except Exception as error:
+                  last_error = str(error)
+
+              if attempt == attempts:
+                  raise SystemExit(
+                      f"Source file was not available after {attempts} attempts: "
+                      f"{identifier}/{source_file}; last error: {last_error}"
+                  )
+              print(
+                  f"Source file is not available yet; retrying in 10 seconds "
+                  f"({attempt}/{attempts}). Last error: {last_error}",
+                  flush=True
+              )
+              time.sleep(10)
+          PY
           if [ ! -s "$source_path" ]; then
             echo "Downloaded source file is empty: $source_path" >&2
             exit 1

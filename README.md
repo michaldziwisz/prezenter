@@ -54,6 +54,8 @@ Edit `/opt/prezenter/deploy/.env` on the server and set:
 PUBLISH_MODE=live
 PUBLIC_API_URL=https://api.prezenter.eu.org
 PUBLIC_FRONTEND_URL=https://prezenter.eu.org
+RETENTION_DAYS=30
+RETENTION_SWEEP_INTERVAL_MS=86400000
 ARCHIVE_ACCESS_KEY=...
 ARCHIVE_SECRET_KEY=...
 GITHUB_OWNER=...
@@ -63,6 +65,11 @@ GITHUB_APP_INSTALLATION_ID=...
 GITHUB_APP_PRIVATE_KEY_BASE64=...
 CALLBACK_SECRET=...
 ```
+
+`RETENTION_DAYS` controls automatic cleanup for rooms that were not ended by
+the presenter. The default is 30 days. Set `RETENTION_DAYS=0` to disable
+automatic cleanup. The cleanup path ends the room and attempts to delete the
+source and rendered presentation items from Internet Archive.
 
 Add matching GitHub repository secrets:
 

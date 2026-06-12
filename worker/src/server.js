@@ -39,7 +39,9 @@ const config = {
   githubRepo: env.GITHUB_REPO ?? '',
   githubWorkflow: env.GITHUB_WORKFLOW ?? 'build-presentation.yml',
   githubRef: env.GITHUB_REF ?? 'main',
-  callbackSecret: env.CALLBACK_SECRET ?? ''
+  callbackSecret: env.CALLBACK_SECRET ?? '',
+  retentionDays: numberEnv(env.RETENTION_DAYS, 30),
+  retentionSweepIntervalMs: numberEnv(env.RETENTION_SWEEP_INTERVAL_MS, 24 * 60 * 60 * 1000)
 };
 
 const dirs = {
@@ -52,6 +54,7 @@ const dirs = {
 const publicationBuckets = new Map();
 const rooms = new Map();
 let githubInstallationTokenCache = null;
+let retentionSweepRunning = false;
 
 const app = Fastify({
   logger: true,
@@ -91,7 +94,8 @@ app.get('/health', async () => ({
 app.get('/api/config', async () => ({
   maxUploadBytes: config.maxUploadBytes,
   publishMode: config.publishMode,
-  liveSync: true
+  liveSync: true,
+  retentionDays: retentionEnabled() ? config.retentionDays : null
 }));
 
 app.post('/api/rooms', async (request, reply) => {
@@ -125,7 +129,7 @@ app.post('/api/rooms/:roomId/end', async (request, reply) => {
     return { error: 'unauthorized' };
   }
 
-  const ended = await endRoom(room);
+  const ended = await endRoom(room, { reason: 'presenter_ended', actor: 'presenter' });
   return {
     ok: true,
     room: publicRoom(ended, { includePresenter: false }),
@@ -389,9 +393,15 @@ wss.on('connection', async (ws) => {
 
 await app.ready();
 await app.listen({ port: config.port, host: config.host });
+startRetentionSweep();
 
 function splitList(value) {
   return (value ?? '').split(',').map((item) => item.trim()).filter(Boolean);
+}
+
+function numberEnv(value, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
 }
 
 function trimSlash(value) {
@@ -571,6 +581,7 @@ function publicRoom(room, options = {}) {
     title: room.title,
     status: room.endedAt ? 'ended' : 'open',
     endedAt: room.endedAt,
+    endedReason: room.endedReason,
     publicationId: room.publicationId ?? room.presentation?.publicationId,
     presentationMode: room.presentationMode ?? room.presentation?.presentationMode,
     presentation: room.presentation ? publicPresentation(room.presentation) : null,
@@ -644,10 +655,12 @@ async function syncRoomPresentation(publication, options = {}) {
   return updated;
 }
 
-async function endRoom(room) {
+async function endRoom(room, options = {}) {
   if (room.endedAt) return room;
 
   const now = new Date().toISOString();
+  const reason = options.reason ?? 'presenter_ended';
+  const actor = options.actor ?? 'presenter';
   const publication = room.publicationId
     ? await readPublication(room.publicationId)
     : await findPublicationByRoomId(room.roomId);
@@ -660,6 +673,7 @@ async function endRoom(room) {
     await updatePublication(publication.id, {
       status: failedDeletion ? 'delete_failed' : 'deleted',
       deletedAt: now,
+      deletionReason: reason,
       archiveDeletion
     });
   }
@@ -668,6 +682,8 @@ async function endRoom(room) {
     ...room,
     status: 'ended',
     endedAt: now,
+    endedReason: reason,
+    endedBy: actor,
     archiveDeletion,
     presentation: null,
     updatedAt: now
@@ -679,9 +695,88 @@ async function endRoom(room) {
     roomId: ended.roomId,
     publicationId: publication?.id,
     at: now,
-    patch: { status: 'room_ended', archiveDeletion }
+    patch: { status: 'room_ended', reason, actor, archiveDeletion }
   });
   return ended;
+}
+
+function retentionEnabled() {
+  return config.retentionDays > 0 && config.retentionSweepIntervalMs > 0;
+}
+
+function startRetentionSweep() {
+  if (!retentionEnabled()) {
+    app.log.info({ retentionDays: config.retentionDays }, 'retention sweep disabled');
+    return;
+  }
+
+  const firstRunDelay = Math.min(config.retentionSweepIntervalMs, 60_000);
+  setTimeout(() => {
+    runRetentionSweep().catch((error) => {
+      app.log.error({ error }, 'retention sweep failed');
+    });
+  }, firstRunDelay);
+
+  setInterval(() => {
+    runRetentionSweep().catch((error) => {
+      app.log.error({ error }, 'retention sweep failed');
+    });
+  }, config.retentionSweepIntervalMs);
+}
+
+async function runRetentionSweep() {
+  if (retentionSweepRunning || !retentionEnabled()) return;
+  retentionSweepRunning = true;
+  const startedAt = new Date().toISOString();
+  const cutoffMs = Date.now() - (config.retentionDays * 24 * 60 * 60 * 1000);
+  const endedRooms = [];
+  const failedRooms = [];
+
+  try {
+    for (const room of rooms.values()) {
+      if (room.endedAt) continue;
+
+      try {
+        const publication = room.publicationId ? await readPublication(room.publicationId) : null;
+        const retainedSince = retentionTimestamp(room, publication);
+        if (!retainedSince || retainedSince > cutoffMs) continue;
+
+        const ended = await endRoom(room, { reason: 'retention_expired', actor: 'retention' });
+        endedRooms.push(ended.roomId);
+      } catch (error) {
+        app.log.warn({ error, roomId: room.roomId }, 'retention room cleanup failed');
+        failedRooms.push({ roomId: room.roomId, error: error.message });
+      }
+    }
+  } finally {
+    retentionSweepRunning = false;
+  }
+
+  if (endedRooms.length || failedRooms.length) {
+    await appendLog('events.jsonl', {
+      at: startedAt,
+      patch: {
+        status: 'retention_sweep_complete',
+        retentionDays: config.retentionDays,
+        endedRooms,
+        failedRooms
+      }
+    });
+  }
+}
+
+function retentionTimestamp(room, publication) {
+  const candidates = [
+    publication?.createdAt,
+    room.createdAt,
+    publication?.updatedAt,
+    room.updatedAt
+  ];
+  for (const value of candidates) {
+    const timestamp = Date.parse(value ?? '');
+    if (Number.isFinite(timestamp)) return timestamp;
+  }
+  return null;
 }
 
 function verifyPresenterToken(room, token) {

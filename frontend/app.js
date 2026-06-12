@@ -5,6 +5,9 @@ const apiUrlInput = document.querySelector('#api-url');
 const bundleInput = document.querySelector('#bundle');
 const bundleHint = document.querySelector('#bundle-hint');
 const modeInputs = [...document.querySelectorAll('input[name="presentationMode"]')];
+const presentationStatus = document.querySelector('#presentation-status');
+const presentationFrame = document.querySelector('#presentation-frame');
+const presentationOpen = document.querySelector('#presentation-open');
 
 const roomApiUrl = document.querySelector('#room-api-url');
 const roomIdInput = document.querySelector('#room-id');
@@ -14,9 +17,12 @@ const stateH = document.querySelector('#state-h');
 const stateV = document.querySelector('#state-v');
 const stateFragment = document.querySelector('#state-fragment');
 const statePaused = document.querySelector('#state-paused');
+const togglePauseButton = document.querySelector('#toggle-pause');
 
 let socket;
 let presenter = false;
+let currentRoom = null;
+let currentPresentation = null;
 let slideState = {
   indexh: 0,
   indexv: 0,
@@ -27,6 +33,7 @@ let slideState = {
 const params = new URLSearchParams(window.location.search);
 const roomFromUrl = params.get('room');
 const presenterKeyFromHash = new URLSearchParams(window.location.hash.slice(1)).get('presenterKey');
+if (roomFromUrl) document.body.classList.add('room-open');
 if (roomFromUrl) roomIdInput.value = roomFromUrl;
 if (presenterKeyFromHash) presenterKeyInput.value = presenterKeyFromHash;
 
@@ -35,6 +42,9 @@ modeInputs.forEach((input) => {
 });
 bundleInput.addEventListener('change', validateBundleForMode);
 updateBundleMode();
+if (roomFromUrl) {
+  loadInitialRoom();
+}
 
 publishForm.addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -70,6 +80,7 @@ publishForm.addEventListener('submit', async (event) => {
 
     setStatus(`Publikacja przyjęta. Status: ${payload.status}.`);
     renderPublication(payload);
+    applyPublicationRoom(payload);
     pollStatus(payload.id);
   } catch (error) {
     setStatus(error.message, true);
@@ -88,9 +99,7 @@ document.querySelector('#create-room').addEventListener('click', async () => {
     });
     const room = await response.json();
     if (!response.ok) throw new Error(room.error || 'Nie udało się utworzyć pokoju.');
-    roomIdInput.value = room.roomId;
-    const key = new URL(room.presenterUrl || window.location.href).hash.slice(1);
-    presenterKeyInput.value = new URLSearchParams(key).get('presenterKey') || '';
+    applyRoom(room);
     setSyncStatus('Pokój utworzony.');
   } catch (error) {
     setSyncStatus(error.message, true);
@@ -101,7 +110,7 @@ document.querySelector('#connect-presenter').addEventListener('click', () => con
 document.querySelector('#connect-viewer').addEventListener('click', () => connectLive(false));
 document.querySelector('#prev-slide').addEventListener('click', () => updateSlide({ indexh: Math.max(0, slideState.indexh - 1), fragment: -1 }));
 document.querySelector('#next-slide').addEventListener('click', () => updateSlide({ indexh: slideState.indexh + 1, fragment: -1 }));
-document.querySelector('#toggle-pause').addEventListener('click', () => updateSlide({ paused: !slideState.paused }));
+togglePauseButton.addEventListener('click', () => updateSlide({ paused: !slideState.paused }));
 
 async function pollStatus(publicationId) {
   for (let index = 0; index < 120; index += 1) {
@@ -112,6 +121,7 @@ async function pollStatus(publicationId) {
       if (response.ok) {
         setStatus(`Status: ${payload.status}.`);
         renderPublication(payload);
+        applyPublicationRoom(payload);
         if (['published', 'failed', 'awaiting_configuration'].includes(payload.status)) return;
       }
     } catch {
@@ -120,11 +130,16 @@ async function pollStatus(publicationId) {
   }
 }
 
-function connectLive(asPresenter) {
+async function connectLive(asPresenter) {
   const roomId = roomIdInput.value.trim();
   if (!roomId) {
     setSyncStatus('Podaj identyfikator pokoju.', true);
     roomIdInput.focus();
+    return;
+  }
+  if (asPresenter && !presenterKeyInput.value.trim()) {
+    setSyncStatus('Połączenie prezentera wymaga tokenu.', true);
+    presenterKeyInput.focus();
     return;
   }
 
@@ -132,6 +147,13 @@ function connectLive(asPresenter) {
   presenter = asPresenter;
 
   const apiUrl = normalizeUrl(roomApiUrl.value);
+  try {
+    await loadRoom(roomId);
+  } catch (error) {
+    setSyncStatus(error.message, true);
+    return;
+  }
+
   const wsBase = apiUrl.replace(/^http/, 'ws');
   const url = new URL(`${wsBase}/ws/live`);
   url.searchParams.set('room', roomId);
@@ -152,6 +174,10 @@ function connectLive(asPresenter) {
   });
   socket.addEventListener('message', (event) => {
     const message = JSON.parse(event.data);
+    if (message.type === 'room') {
+      applyRoom(message.room);
+      return;
+    }
     if (message.type === 'state') {
       slideState = { ...slideState, ...message.state };
       renderSlideState();
@@ -174,6 +200,8 @@ function renderSlideState() {
   stateV.textContent = String(slideState.indexv);
   stateFragment.textContent = String(slideState.fragment);
   statePaused.textContent = slideState.paused ? 'tak' : 'nie';
+  togglePauseButton.setAttribute('aria-pressed', String(slideState.paused));
+  updatePresentationFrame();
 }
 
 function renderPublication(publication) {
@@ -190,6 +218,125 @@ function renderPublication(publication) {
   if (publication.missingConfiguration?.length) {
     addDetail('Brak konfiguracji', publication.missingConfiguration.join(', '));
   }
+}
+
+async function loadInitialRoom() {
+  try {
+    await loadRoom(roomFromUrl);
+    await connectLive(Boolean(presenterKeyFromHash));
+  } catch (error) {
+    setSyncStatus(error.message, true);
+  }
+}
+
+async function loadRoom(roomId) {
+  const response = await fetch(`${normalizeUrl(roomApiUrl.value)}/api/rooms/${encodeURIComponent(roomId)}`);
+  const room = await response.json();
+  if (!response.ok) throw new Error(room.error || 'Nie udało się pobrać pokoju.');
+  applyRoom(room);
+  return room;
+}
+
+function applyRoom(room) {
+  if (!room) return;
+  currentRoom = room;
+  roomIdInput.value = room.roomId || roomIdInput.value;
+  if (room.presenterKey) presenterKeyInput.value = room.presenterKey;
+  if (!presenterKeyInput.value && room.presenterUrl) {
+    const key = new URL(room.presenterUrl || window.location.href).hash.slice(1);
+    presenterKeyInput.value = new URLSearchParams(key).get('presenterKey') || '';
+  }
+  renderPresentation(room.presentation);
+}
+
+function applyPublicationRoom(publication) {
+  if (!publication?.roomId) return;
+  roomIdInput.value = publication.roomId;
+  if (!presenterKeyInput.value && publication.presenterUrl) {
+    const key = new URL(publication.presenterUrl || window.location.href).hash.slice(1);
+    presenterKeyInput.value = new URLSearchParams(key).get('presenterKey') || '';
+  }
+  if (publication.resultUrl || publication.status === 'failed') {
+    renderPresentation(publicationToPresentation(publication));
+  }
+}
+
+function publicationToPresentation(publication) {
+  return {
+    publicationId: publication.id,
+    title: publication.title,
+    presentationMode: publication.presentationMode,
+    status: publication.status,
+    resultUrl: publication.resultUrl,
+    accessibilityReport: publication.accessibilityReport,
+    archiveIdentifier: publication.archiveIdentifier,
+    updatedAt: publication.updatedAt
+  };
+}
+
+function renderPresentation(presentation) {
+  currentPresentation = presentation || null;
+  if (!currentPresentation) {
+    presentationStatus.textContent = 'Brak prezentacji przypiętej do pokoju.';
+    presentationFrame.hidden = true;
+    presentationFrame.removeAttribute('src');
+    presentationOpen.hidden = true;
+    return;
+  }
+
+  const mode = formatPresentationMode(currentPresentation.presentationMode);
+  if (!currentPresentation.resultUrl) {
+    presentationStatus.textContent = currentPresentation.status === 'failed'
+      ? 'Publikacja nie powiodła się.'
+      : `Prezentacja ${mode} jest jeszcze przetwarzana.`;
+    presentationFrame.hidden = true;
+    presentationFrame.removeAttribute('src');
+    presentationOpen.hidden = true;
+    return;
+  }
+
+  presentationStatus.textContent = `Widoczna prezentacja: ${mode}.`;
+  presentationOpen.href = currentPresentation.resultUrl;
+  presentationOpen.hidden = false;
+  presentationFrame.hidden = false;
+  updatePresentationFrame(true);
+}
+
+function updatePresentationFrame(force = false) {
+  if (!currentPresentation?.resultUrl || presentationFrame.hidden) return;
+  const nextUrl = controlledPresentationUrl(currentPresentation, slideState);
+  if (force || presentationFrame.getAttribute('src') !== nextUrl) {
+    presentationFrame.src = nextUrl;
+  }
+}
+
+function controlledPresentationUrl(presentation, state) {
+  if (presentation.presentationMode === 'pptx') {
+    const pdfUrl = siblingArchiveFileUrl(presentation.resultUrl, 'presentation.pdf');
+    pdfUrl.hash = `page=${Math.max(1, (state.indexh || 0) + 1)}`;
+    return pdfUrl.toString();
+  }
+
+  const url = new URL(presentation.resultUrl, window.location.href);
+  const h = Math.max(0, state.indexh || 0);
+  const v = Math.max(0, state.indexv || 0);
+  const fragment = Number.isInteger(state.fragment) ? state.fragment : -1;
+  if (fragment >= 0) {
+    url.hash = `/${h}/${v}/${fragment}`;
+  } else if (v > 0) {
+    url.hash = `/${h}/${v}`;
+  } else {
+    url.hash = `/${h}`;
+  }
+  return url.toString();
+}
+
+function siblingArchiveFileUrl(resultUrl, filename) {
+  const url = new URL(resultUrl, window.location.href);
+  url.pathname = url.pathname.replace(/\/[^/]*$/, `/${filename}`);
+  url.search = '';
+  url.hash = '';
+  return url;
 }
 
 function addDetail(label, value) {

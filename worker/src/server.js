@@ -107,7 +107,8 @@ app.get('/api/rooms/:roomId', async (request, reply) => {
     reply.code(404);
     return { error: 'room_not_found' };
   }
-  return publicRoom(room, { includePresenter: false });
+  const hydrated = await hydrateRoomPresentation(room);
+  return publicRoom(hydrated, { includePresenter: false });
 });
 
 app.post('/api/publish', async (request, reply) => {
@@ -156,7 +157,7 @@ app.post('/api/publish', async (request, reply) => {
   const short = publicationId.replace(/^pub_/, '').slice(0, 10);
   const sourceIdentifier = fields.sourceIdentifier || makeArchiveIdentifier(config.archiveSourcePrefix, title, short);
   const outputIdentifier = fields.outputIdentifier || makeArchiveIdentifier(config.archiveOutputPrefix, title, short);
-  const room = await createRoom(title);
+  const room = await createRoom(title, { publicationId, presentationMode, status: 'received' });
 
   const publication = {
     id: publicationId,
@@ -272,13 +273,21 @@ server.on('upgrade', (request, socket, head) => {
   });
 });
 
-wss.on('connection', (ws) => {
-  const room = rooms.get(ws.roomId);
+wss.on('connection', async (ws) => {
+  let room = rooms.get(ws.roomId);
   if (!room) {
     ws.close(1008, 'room_not_found');
     return;
   }
+  try {
+    room = await hydrateRoomPresentation(room);
+  } catch (error) {
+    app.log.error({ error, roomId: ws.roomId }, 'room hydration failed');
+    ws.close(1011, 'room_hydration_failed');
+    return;
+  }
 
+  ws.send(JSON.stringify({ type: 'room', room: publicRoom(room, { includePresenter: false }) }));
   ws.send(JSON.stringify({ type: 'state', roomId: room.roomId, state: room.state }));
 
   ws.on('message', async (raw) => {
@@ -410,13 +419,23 @@ function consumeRateLimit(ip) {
   return true;
 }
 
-async function createRoom(title = '') {
+async function createRoom(title = '', options = {}) {
   const roomId = randomId('room').slice(0, 22);
   const presenterKey = randomToken();
   const now = new Date().toISOString();
+  const cleanTitle = String(title || 'Presentation room').slice(0, 160);
   const room = {
     roomId,
-    title: String(title || 'Presentation room').slice(0, 160),
+    title: cleanTitle,
+    publicationId: options.publicationId,
+    presentationMode: options.presentationMode,
+    presentation: options.publicationId ? {
+      publicationId: options.publicationId,
+      title: cleanTitle,
+      presentationMode: options.presentationMode ?? 'markdown',
+      status: options.status ?? 'received',
+      updatedAt: now
+    } : null,
     presenterKeyHash: hash(presenterKey),
     createdAt: now,
     updatedAt: now,
@@ -445,11 +464,74 @@ function publicRoom(room, options = {}) {
   return {
     roomId: room.roomId,
     title: room.title,
+    publicationId: room.publicationId ?? room.presentation?.publicationId,
+    presentationMode: room.presentationMode ?? room.presentation?.presentationMode,
+    presentation: room.presentation ?? null,
     presenterKey: includePresenter ? room.presenterKey ?? '' : undefined,
     viewerUrl,
     presenterUrl,
     wsUrl: config.publicApiUrl ? `${config.publicApiUrl.replace(/^http/, 'ws')}/ws/live` : ''
   };
+}
+
+async function hydrateRoomPresentation(room) {
+  if (!room) return room;
+  if (room.presentation?.resultUrl || room.presentation?.status === 'failed') return room;
+
+  const publication = room.publicationId
+    ? await readPublication(room.publicationId)
+    : await findPublicationByRoomId(room.roomId);
+  if (!publication) return room;
+
+  await syncRoomPresentation(publication, { broadcast: false });
+  return rooms.get(room.roomId) ?? room;
+}
+
+async function findPublicationByRoomId(roomId) {
+  const entries = await fs.readdir(dirs.publications).catch(() => []);
+  let found = null;
+  for (const entry of entries) {
+    if (!entry.endsWith('.json')) continue;
+    const publication = await readJson(path.join(dirs.publications, entry));
+    if (publication?.roomId !== roomId) continue;
+    if (!found || String(publication.updatedAt ?? '') > String(found.updatedAt ?? '')) {
+      found = publication;
+    }
+  }
+  return found;
+}
+
+async function syncRoomPresentation(publication, options = {}) {
+  if (!publication?.roomId) return null;
+  const existing = rooms.get(publication.roomId)
+    ?? await readJson(path.join(dirs.rooms, `${publication.roomId}.json`));
+  if (!existing) return null;
+
+  const now = new Date().toISOString();
+  const updated = {
+    ...existing,
+    title: publication.title || existing.title,
+    publicationId: publication.id,
+    presentationMode: publication.presentationMode ?? existing.presentationMode ?? 'markdown',
+    presentation: {
+      publicationId: publication.id,
+      title: publication.title || existing.title,
+      presentationMode: publication.presentationMode ?? existing.presentationMode ?? 'markdown',
+      status: publication.status,
+      resultUrl: publication.resultUrl,
+      accessibilityReport: publication.accessibilityReport,
+      archiveIdentifier: publication.archiveIdentifier,
+      updatedAt: publication.updatedAt ?? now
+    },
+    updatedAt: now
+  };
+
+  rooms.set(updated.roomId, updated);
+  await persistRoom(updated);
+  if (options.broadcast ?? true) {
+    broadcastRoom(updated.roomId, { type: 'room', room: publicRoom(updated, { includePresenter: false }) });
+  }
+  return updated;
 }
 
 function verifyPresenterToken(room, token) {
@@ -731,6 +813,7 @@ async function updatePublication(publicationId, patch) {
   };
   await savePublication(updated);
   await appendLog('events.jsonl', { publicationId, at: now, patch });
+  await syncRoomPresentation(updated);
   return updated;
 }
 

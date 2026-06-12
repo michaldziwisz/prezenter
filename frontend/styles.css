@@ -36,7 +36,9 @@ select {
 
 button:focus-visible,
 input:focus-visible,
-select:focus-visible {
+select:focus-visible,
+a:focus-visible,
+iframe:focus-visible {
   outline: 3px solid var(--focus);
   outline-offset: 3px;
 }
@@ -59,6 +61,22 @@ select:focus-visible {
 
 .band {
   padding: 32px 0;
+}
+
+body.room-open .publish-band {
+  display: none;
+}
+
+body.room-open .intro-band {
+  padding: 16px 0 0;
+}
+
+body.room-open .intro p {
+  display: none;
+}
+
+body.room-open h1 {
+  font-size: 1.5rem;
 }
 
 .band-alt {
@@ -96,11 +114,34 @@ h3 {
   gap: 24px;
 }
 
+.room-layout {
+  display: grid;
+  gap: 24px;
+}
+
 .panel {
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 20px;
   background: var(--panel);
+}
+
+.presentation-heading {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.presentation-panel iframe {
+  display: block;
+  width: 100%;
+  min-height: min(72vh, 720px);
+  margin-top: 16px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #ffffff;
 }
 
 .field {

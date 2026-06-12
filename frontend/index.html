@@ -14,14 +14,14 @@
     </header>
 
     <main>
-      <section class="band">
+      <section class="band intro-band">
         <div class="wrap intro">
           <h1>Dostępne prezentacje</h1>
           <p>Przygotuj paczkę prezentacji, sprawdź wymagane deklaracje i opublikuj ją publicznie.</p>
         </div>
       </section>
 
-      <section class="band band-alt">
+      <section class="band band-alt publish-band">
         <div class="wrap layout">
           <form id="publish-form" class="panel" novalidate>
             <h2>Publikacja</h2>
@@ -95,61 +95,72 @@
       </section>
 
       <section class="band">
-        <div class="wrap layout">
-          <section class="panel" aria-labelledby="room-title">
-            <h2 id="room-title">Tryb prezentera</h2>
-
-            <div class="field">
-              <label for="room-api-url">Adres API</label>
-              <input id="room-api-url" type="url" value="https://api.prezenter.eu.org">
+        <div class="wrap room-layout">
+          <section class="panel presentation-panel" aria-labelledby="presentation-title">
+            <div class="presentation-heading">
+              <h2 id="presentation-title">Prezentacja</h2>
+              <a id="presentation-open" href="#" target="_blank" rel="noopener" hidden>Otwórz w nowej karcie</a>
             </div>
-
-            <div class="field">
-              <label for="room-id">Pokój</label>
-              <input id="room-id" type="text" autocomplete="off">
-            </div>
-
-            <div class="field">
-              <label for="presenter-key">Token prezentera</label>
-              <input id="presenter-key" type="password" autocomplete="off">
-            </div>
-
-            <div class="actions">
-              <button id="create-room" type="button">Utwórz pokój</button>
-              <button id="connect-presenter" type="button">Połącz jako prezenter</button>
-              <button id="connect-viewer" type="button">Połącz jako widz</button>
-            </div>
-
-            <div class="controls" aria-labelledby="slide-controls-title">
-              <h3 id="slide-controls-title">Sterowanie</h3>
-              <button id="prev-slide" type="button">Poprzedni slajd</button>
-              <button id="next-slide" type="button">Następny slajd</button>
-              <button id="toggle-pause" type="button">Pauza</button>
-            </div>
+            <div id="presentation-status" class="status" aria-live="polite" aria-atomic="true">Brak prezentacji przypiętej do pokoju.</div>
+            <iframe id="presentation-frame" title="Podgląd prezentacji" loading="lazy" hidden></iframe>
           </section>
 
-          <section class="panel" aria-labelledby="sync-title">
-            <h2 id="sync-title">Synchronizacja</h2>
-            <div id="sync-status" class="status" aria-live="polite" aria-atomic="true">Nie połączono.</div>
-            <dl class="details">
-              <div>
-                <dt>Slajd poziomy</dt>
-                <dd id="state-h">0</dd>
+          <div class="layout">
+            <section class="panel" aria-labelledby="room-title">
+              <h2 id="room-title">Tryb prezentera</h2>
+
+              <div class="field">
+                <label for="room-api-url">Adres API</label>
+                <input id="room-api-url" type="url" value="https://api.prezenter.eu.org">
               </div>
-              <div>
-                <dt>Slajd pionowy</dt>
-                <dd id="state-v">0</dd>
+
+              <div class="field">
+                <label for="room-id">Pokój</label>
+                <input id="room-id" type="text" autocomplete="off">
               </div>
-              <div>
-                <dt>Fragment</dt>
-                <dd id="state-fragment">-1</dd>
+
+              <div class="field">
+                <label for="presenter-key">Token prezentera</label>
+                <input id="presenter-key" type="password" autocomplete="off">
               </div>
-              <div>
-                <dt>Pauza</dt>
-                <dd id="state-paused">nie</dd>
+
+              <div class="actions">
+                <button id="create-room" type="button">Utwórz pokój</button>
+                <button id="connect-presenter" type="button">Połącz jako prezenter</button>
+                <button id="connect-viewer" type="button">Połącz jako widz</button>
               </div>
-            </dl>
-          </section>
+
+              <div class="controls" aria-labelledby="slide-controls-title">
+                <h3 id="slide-controls-title">Sterowanie</h3>
+                <button id="prev-slide" type="button">Poprzedni slajd</button>
+                <button id="next-slide" type="button">Następny slajd</button>
+                <button id="toggle-pause" type="button" aria-pressed="false">Pauza</button>
+              </div>
+            </section>
+
+            <section class="panel" aria-labelledby="sync-title">
+              <h2 id="sync-title">Synchronizacja</h2>
+              <div id="sync-status" class="status" aria-live="polite" aria-atomic="true">Nie połączono.</div>
+              <dl class="details">
+                <div>
+                  <dt>Slajd poziomy</dt>
+                  <dd id="state-h">0</dd>
+                </div>
+                <div>
+                  <dt>Slajd pionowy</dt>
+                  <dd id="state-v">0</dd>
+                </div>
+                <div>
+                  <dt>Fragment</dt>
+                  <dd id="state-fragment">-1</dd>
+                </div>
+                <div>
+                  <dt>Pauza</dt>
+                  <dd id="state-paused">nie</dd>
+                </div>
+              </dl>
+            </section>
+          </div>
         </div>
       </section>
     </main>

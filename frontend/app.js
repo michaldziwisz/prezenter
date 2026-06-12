@@ -14,6 +14,7 @@ const slideText = document.querySelector('#slide-text');
 const roomIdInput = document.querySelector('#room-id');
 const presenterKeyInput = document.querySelector('#presenter-key');
 const syncStatus = document.querySelector('#sync-status');
+const followPresenterInput = document.querySelector('#follow-presenter');
 const stateH = document.querySelector('#state-h');
 const stateTotal = document.querySelector('#state-total');
 const prevSlideButton = document.querySelector('#prev-slide');
@@ -27,6 +28,13 @@ let currentRoom = null;
 let currentPresentation = null;
 let currentDeck = null;
 let deckLoadToken = 0;
+let followPresenter = true;
+let presenterState = {
+  indexh: 0,
+  indexv: 0,
+  fragment: -1,
+  paused: false
+};
 let slideState = {
   indexh: 0,
   indexv: 0,
@@ -115,6 +123,17 @@ document.querySelector('#connect-presenter').addEventListener('click', () => con
 document.querySelector('#connect-viewer').addEventListener('click', () => connectLive(false));
 prevSlideButton.addEventListener('click', () => updateSlide({ indexh: slideIndex() - 1, fragment: -1 }));
 nextSlideButton.addEventListener('click', () => updateSlide({ indexh: slideIndex() + 1, fragment: -1 }));
+followPresenterInput.addEventListener('change', () => {
+  followPresenter = followPresenterInput.checked;
+  if (followPresenter && !presenter) {
+    slideState = sanitizeLocalSlideState(presenterState);
+    renderSlideState();
+    setSyncStatus('Podążanie za prezenterem włączone.');
+  } else if (!presenter) {
+    setSyncStatus('Podążanie za prezenterem wyłączone.');
+  }
+  updatePresenterControls();
+});
 
 async function pollStatus(publicationId) {
   for (let index = 0; index < 120; index += 1) {
@@ -187,18 +206,34 @@ async function connectLive(asPresenter) {
       return;
     }
     if (message.type === 'state') {
-      slideState = { ...slideState, ...message.state };
-      renderSlideState();
+      presenterState = normalizeIncomingSlideState(message.state, presenterState);
+      if (presenter || followPresenter) {
+        slideState = sanitizeLocalSlideState(presenterState);
+        renderSlideState();
+      } else {
+        updatePresenterControls();
+      }
     }
   });
 }
 
 function updateSlide(patch) {
-  if (!presenter || !socket || socket.readyState !== WebSocket.OPEN) {
+  if (!presenter) {
+    if (followPresenter) {
+      setSyncStatus('Wyłącz podążanie za prezenterem, aby zmienić slajd lokalnie.', true);
+      return;
+    }
+    slideState = sanitizeLocalSlideState({ ...slideState, ...patch });
+    renderSlideState();
+    return;
+  }
+
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
     setSyncStatus('Sterowanie wymaga połączenia jako prezenter.', true);
     return;
   }
   slideState = sanitizeLocalSlideState({ ...slideState, ...patch });
+  presenterState = { ...slideState };
   socket.send(JSON.stringify({ type: 'state:update', state: slideState }));
   renderSlideState();
 }
@@ -314,6 +349,9 @@ function renderPresentation(presentation) {
       currentDeck = deck;
       presentationStage.setAttribute('aria-busy', 'false');
       presentationStatus.textContent = `Widoczna prezentacja: ${mode}.`;
+      if (!presenter && followPresenter) {
+        slideState = sanitizeLocalSlideState(presenterState);
+      }
       renderSlideState();
     })
     .catch((error) => {
@@ -552,14 +590,27 @@ function clearPresentationStage() {
 }
 
 function updatePresenterControls() {
-  const canControl = Boolean(
-    presenter
-    && socket?.readyState === WebSocket.OPEN
-    && currentDeck?.slides.length
+  const hasDeck = Boolean(currentDeck?.slides.length);
+  const canControl = hasDeck && (
+    (presenter && socket?.readyState === WebSocket.OPEN)
+    || (!presenter && !followPresenter)
   );
   const index = slideIndex();
   prevSlideButton.disabled = !canControl || index <= 0;
   nextSlideButton.disabled = !canControl || index >= (currentDeck?.slides.length ?? 0) - 1;
+  followPresenterInput.disabled = presenter;
+  followPresenterInput.checked = followPresenter;
+}
+
+function normalizeIncomingSlideState(state, fallback) {
+  const next = { ...fallback };
+  if (Number.isInteger(state?.indexh) && state.indexh >= 0 && state.indexh <= 10000) {
+    next.indexh = state.indexh;
+  }
+  next.indexv = 0;
+  next.fragment = -1;
+  next.paused = false;
+  return next;
 }
 
 function sanitizeLocalSlideState(state) {

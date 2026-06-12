@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Prezenter</title>
-    <link rel="stylesheet" href="./styles.css?v=20260612-fixed-api">
+    <link rel="stylesheet" href="./styles.css?v=20260612-follow-toggle">
   </head>
   <body>
     <header class="site-header">
@@ -111,7 +111,7 @@
 
           <div class="layout">
             <section class="panel" aria-labelledby="room-title">
-              <h2 id="room-title">Tryb prezentera</h2>
+              <h2 id="room-title">Pokój</h2>
 
               <div class="field">
                 <label for="room-id">Pokój</label>
@@ -139,6 +139,10 @@
             <section class="panel" aria-labelledby="sync-title">
               <h2 id="sync-title">Synchronizacja</h2>
               <div id="sync-status" class="status" aria-live="polite" aria-atomic="true">Nie połączono.</div>
+              <label class="check sync-option">
+                <input id="follow-presenter" type="checkbox" checked>
+                Podążaj za prezenterem
+              </label>
               <dl class="details">
                 <div>
                   <dt>Slajd</dt>
@@ -155,6 +159,6 @@
       </section>
     </main>
 
-    <script src="./app.js?v=20260612-fixed-api" type="module"></script>
+    <script src="./app.js?v=20260612-follow-toggle" type="module"></script>
   </body>
 </html>

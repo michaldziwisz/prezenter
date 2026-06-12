@@ -136,6 +136,16 @@ ARCHIVE_SECRET_KEY
 `CALLBACK_SECRET` authenticates GitHub Actions callbacks to the worker. Internet
 Archive keys are not needed until live publishing is enabled.
 
+Install Internet Archive keys from the local workspace:
+
+```bash
+./scripts/install-archive-keys.sh ca
+```
+
+The script validates the keys, writes them to `/opt/prezenter/deploy/.env`, sets
+the matching GitHub Actions secrets, and restarts the worker. It does not use
+`gh` on the VPS.
+
 ## VPS Boundaries
 
 - Runtime secrets live only in `/opt/prezenter/deploy/.env`.

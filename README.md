@@ -92,3 +92,17 @@ fallback.
 See [docs/security.md](docs/security.md) for exact GitHub UI steps and local
 installation scripts. Do not configure GitHub authentication with `gh` on the
 VPS.
+
+## Internet Archive Keys
+
+Generate IA-S3 keys at:
+
+```text
+https://archive.org/account/s3.php
+```
+
+Install them locally with:
+
+```bash
+./scripts/install-archive-keys.sh ca
+```

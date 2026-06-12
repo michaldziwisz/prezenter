@@ -205,6 +205,37 @@ app.get('/api/publications/:publicationId/status', async (request, reply) => {
   return clientPublication(publication);
 });
 
+app.get('/api/presentations/:identifier/:filename', async (request, reply) => {
+  const identifier = String(request.params.identifier ?? '');
+  const filename = String(request.params.filename ?? '');
+  if (!isSafeArchiveIdentifier(identifier) || !isSafePresentationFilename(filename)) {
+    reply.code(404);
+    return { error: 'presentation_asset_not_found' };
+  }
+
+  const archiveUrl = `https://archive.org/download/${encodeURIComponent(identifier)}/${encodeURIComponent(filename)}`;
+  let response;
+  try {
+    response = await fetch(archiveUrl);
+  } catch (error) {
+    app.log.warn({ error, archiveUrl }, 'presentation asset fetch failed');
+    reply.code(502);
+    return { error: 'archive_fetch_failed' };
+  }
+
+  if (!response.ok) {
+    reply.code(response.status === 404 ? 404 : 502);
+    return { error: 'archive_asset_unavailable' };
+  }
+
+  const body = Buffer.from(await response.arrayBuffer());
+  reply
+    .header('Cache-Control', 'public, max-age=300')
+    .header('X-Content-Type-Options', 'nosniff')
+    .type(mimeTypeForPresentationAsset(filename));
+  return reply.send(body);
+});
+
 app.post('/api/github/callback', async (request, reply) => {
   if (!config.callbackSecret) {
     reply.code(503);
@@ -230,11 +261,20 @@ app.post('/api/github/callback', async (request, reply) => {
     return { error: 'publication_not_found' };
   }
 
+  const archiveIdentifier = body.archiveIdentifier
+    || archiveIdentifierFromUrl(body.resultUrl)
+    || archiveIdentifierFromUrl(body.accessibilityReport)
+    || publication.outputIdentifier;
+
   await updatePublication(publication.id, {
     status: body.status,
-    resultUrl: body.resultUrl,
-    archiveIdentifier: body.archiveIdentifier,
-    accessibilityReport: body.accessibilityReport,
+    resultUrl: body.resultUrl
+      ? presentationAssetUrl(archiveIdentifier, 'index.html') || body.resultUrl
+      : body.resultUrl,
+    archiveIdentifier,
+    accessibilityReport: body.accessibilityReport
+      ? presentationAssetUrl(archiveIdentifier, 'accessibility-report.json') || body.accessibilityReport
+      : body.accessibilityReport,
     callback: body
   });
 
@@ -356,6 +396,33 @@ function sanitizeFilename(filename) {
   return path.basename(filename).replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 180);
 }
 
+function isSafeArchiveIdentifier(identifier) {
+  return /^[a-z0-9][a-z0-9._-]{1,120}$/i.test(identifier);
+}
+
+function isSafePresentationFilename(filename) {
+  return (
+    /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,179}$/.test(filename)
+    && !filename.includes('..')
+  );
+}
+
+function mimeTypeForPresentationAsset(filename) {
+  const lower = filename.toLowerCase();
+  if (lower.endsWith('.html') || lower.endsWith('.htm')) return 'text/html; charset=utf-8';
+  if (lower.endsWith('.json')) return 'application/json; charset=utf-8';
+  if (lower.endsWith('.css')) return 'text/css; charset=utf-8';
+  if (lower.endsWith('.js')) return 'application/javascript; charset=utf-8';
+  if (lower.endsWith('.png')) return 'image/png';
+  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
+  if (lower.endsWith('.gif')) return 'image/gif';
+  if (lower.endsWith('.svg')) return 'image/svg+xml';
+  if (lower.endsWith('.pdf')) return 'application/pdf';
+  if (lower.endsWith('.pptx')) return 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+  if (lower.endsWith('.md')) return 'text/markdown; charset=utf-8';
+  return 'application/octet-stream';
+}
+
 function slugify(value) {
   const slug = value
     .normalize('NFKD')
@@ -466,7 +533,7 @@ function publicRoom(room, options = {}) {
     title: room.title,
     publicationId: room.publicationId ?? room.presentation?.publicationId,
     presentationMode: room.presentationMode ?? room.presentation?.presentationMode,
-    presentation: room.presentation ?? null,
+    presentation: room.presentation ? publicPresentation(room.presentation) : null,
     presenterKey: includePresenter ? room.presenterKey ?? '' : undefined,
     viewerUrl,
     presenterUrl,
@@ -518,8 +585,8 @@ async function syncRoomPresentation(publication, options = {}) {
       title: publication.title || existing.title,
       presentationMode: publication.presentationMode ?? existing.presentationMode ?? 'markdown',
       status: publication.status,
-      resultUrl: publication.resultUrl,
-      accessibilityReport: publication.accessibilityReport,
+      resultUrl: publication.resultUrl ? publicResultUrl(publication) : publication.resultUrl,
+      accessibilityReport: publication.accessibilityReport ? publicAccessibilityReportUrl(publication) : publication.accessibilityReport,
       archiveIdentifier: publication.archiveIdentifier,
       updatedAt: publication.updatedAt ?? now
     },
@@ -847,8 +914,8 @@ function clientPublication(publication) {
     sourceIdentifier: publication.sourceIdentifier,
     sourceFile: publication.sourceFile,
     outputIdentifier: publication.outputIdentifier,
-    resultUrl: publication.resultUrl,
-    accessibilityReport: publication.accessibilityReport,
+    resultUrl: publication.resultUrl ? publicResultUrl(publication) : publication.resultUrl,
+    accessibilityReport: publication.accessibilityReport ? publicAccessibilityReportUrl(publication) : publication.accessibilityReport,
     archiveIdentifier: publication.archiveIdentifier,
     roomId: publication.roomId,
     viewerUrl: publication.viewerUrl,
@@ -858,6 +925,61 @@ function clientPublication(publication) {
     error: publication.error,
     events: publication.events
   };
+}
+
+function publicPresentation(presentation) {
+  return {
+    ...presentation,
+    resultUrl: presentation.resultUrl ? publicResultUrl(presentation) : presentation.resultUrl,
+    accessibilityReport: presentation.accessibilityReport
+      ? publicAccessibilityReportUrl(presentation)
+      : presentation.accessibilityReport
+  };
+}
+
+function publicResultUrl(value) {
+  const identifier = archiveIdentifierFor(value);
+  return presentationAssetUrl(identifier, 'index.html') || value.resultUrl;
+}
+
+function publicAccessibilityReportUrl(value) {
+  const identifier = archiveIdentifierFor(value);
+  return presentationAssetUrl(identifier, 'accessibility-report.json') || value.accessibilityReport;
+}
+
+function archiveIdentifierFor(value) {
+  return value.archiveIdentifier
+    || value.outputIdentifier
+    || archiveIdentifierFromUrl(value.resultUrl)
+    || archiveIdentifierFromUrl(value.accessibilityReport)
+    || '';
+}
+
+function presentationAssetUrl(identifier, filename) {
+  if (!isSafeArchiveIdentifier(String(identifier ?? '')) || !isSafePresentationFilename(filename)) {
+    return '';
+  }
+  const encodedIdentifier = encodeURIComponent(identifier);
+  const encodedFilename = encodeURIComponent(filename);
+  if (config.publicApiUrl) {
+    return `${config.publicApiUrl}/api/presentations/${encodedIdentifier}/${encodedFilename}`;
+  }
+  return `https://archive.org/download/${encodedIdentifier}/${encodedFilename}`;
+}
+
+function archiveIdentifierFromUrl(value) {
+  if (!value) return '';
+  try {
+    const url = new URL(value);
+    const parts = url.pathname.split('/').filter(Boolean);
+    const downloadIndex = parts.indexOf('download');
+    if (downloadIndex >= 0 && parts[downloadIndex + 1]) return parts[downloadIndex + 1];
+    const itemsIndex = parts.indexOf('items');
+    if (itemsIndex >= 0 && parts[itemsIndex + 1]) return parts[itemsIndex + 1];
+  } catch {
+    return '';
+  }
+  return '';
 }
 
 async function writeJson(filePath, data) {

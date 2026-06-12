@@ -491,6 +491,8 @@ jobs:
       - name: Callback success
         if: success()
         run: |
+          result_base="${{ inputs.callback_url }}"
+          result_base="${result_base%/api/github/callback}"
           curl -fsS -X POST "${{ inputs.callback_url }}" \
             -H "Content-Type: application/json" \
             -H "X-Prezenter-Callback-Secret: ${{ secrets.CALLBACK_SECRET }}" \
@@ -499,8 +501,8 @@ jobs:
             "publicationId": "${{ inputs.publication_id }}",
             "status": "published",
             "archiveIdentifier": "${{ inputs.output_identifier }}",
-            "resultUrl": "https://archive.org/download/${{ inputs.output_identifier }}/index.html",
-            "accessibilityReport": "https://archive.org/download/${{ inputs.output_identifier }}/accessibility-report.json"
+            "resultUrl": "${result_base}/api/presentations/${{ inputs.output_identifier }}/index.html",
+            "accessibilityReport": "${result_base}/api/presentations/${{ inputs.output_identifier }}/accessibility-report.json"
           }
           EOF
 

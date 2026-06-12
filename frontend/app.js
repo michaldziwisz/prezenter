@@ -353,6 +353,7 @@ function normalizeSlidesJson(payload, slidesUrl, presentation) {
     imageUrl: resolveAssetUrl(slide.image, baseUrl),
     paragraphs: normalizeParagraphs(slide.paragraphs),
     tables: normalizeTables(slide.tables),
+    media: normalizeMedia(slide.media, baseUrl),
     nonTextShapes: Number.isInteger(slide.nonTextShapes) ? slide.nonTextShapes : 0
   }));
 
@@ -398,6 +399,21 @@ function extractSlideFromHtml(section, index, baseUrl) {
         .filter((row) => row.some(Boolean))
     }))
     .filter((table) => table.rows.length);
+  const media = [...section.querySelectorAll('audio, video')]
+    .map((element, mediaIndex) => {
+      const source = element.querySelector('source')?.getAttribute('src') || element.getAttribute('src');
+      const figure = element.closest('figure');
+      const caption = cleanText(figure?.querySelector('figcaption')?.textContent);
+      const type = element.tagName.toLowerCase() === 'video' ? 'video' : 'audio';
+      return {
+        type,
+        src: resolveAssetUrl(source, baseUrl),
+        mimeType: element.querySelector('source')?.getAttribute('type') || '',
+        title: element.getAttribute('aria-label') || caption || `${type === 'video' ? 'Wideo' : 'Audio'} ${mediaIndex + 1}`,
+        description: caption
+      };
+    })
+    .filter((item) => item.src);
 
   return {
     index: index + 1,
@@ -405,6 +421,7 @@ function extractSlideFromHtml(section, index, baseUrl) {
     imageUrl: resolveAssetUrl(image?.getAttribute('src'), baseUrl),
     paragraphs,
     tables,
+    media,
     nonTextShapes: image ? 1 : 0
   };
 }
@@ -440,6 +457,11 @@ function renderCurrentSlide() {
     slideText.append(renderTable(table.rows, index, tableIndex));
     hasBody = true;
   });
+
+  if (slide.media.length) {
+    slideText.append(renderMediaSection(slide.media));
+    hasBody = true;
+  }
 
   if (!hasBody) {
     const empty = document.createElement('p');
@@ -477,6 +499,46 @@ function renderTable(rows, slideIndexValue, tableIndex) {
   });
   table.append(tbody);
   return table;
+}
+
+function renderMediaSection(mediaItems) {
+  const section = document.createElement('section');
+  section.className = 'slide-media-list';
+  const heading = document.createElement('h4');
+  heading.textContent = 'Multimedia';
+  section.append(heading);
+
+  mediaItems.forEach((media, index) => {
+    const figure = document.createElement('figure');
+    figure.className = 'slide-media';
+    const player = document.createElement(media.type === 'video' ? 'video' : 'audio');
+    player.controls = true;
+    player.preload = 'metadata';
+    player.setAttribute('aria-label', media.title || mediaLabel(media.type, index));
+
+    const source = document.createElement('source');
+    source.src = media.src;
+    if (media.mimeType) source.type = media.mimeType;
+    player.append(source);
+    player.append(document.createTextNode('Twoja przeglądarka nie może odtworzyć tego materiału.'));
+
+    const caption = document.createElement('figcaption');
+    const title = document.createElement('strong');
+    title.textContent = media.title || mediaLabel(media.type, index);
+    caption.append(title);
+    if (media.description) {
+      caption.append(document.createElement('br'), document.createTextNode(media.description));
+    }
+
+    figure.append(player, caption);
+    section.append(figure);
+  });
+
+  return section;
+}
+
+function mediaLabel(type, index) {
+  return `${type === 'video' ? 'Wideo' : 'Audio'} ${index + 1}`;
 }
 
 function clearPresentationStage() {
@@ -554,6 +616,24 @@ function normalizeTables(items) {
         : []
     }))
     .filter((item) => item.rows.some((row) => row.some(Boolean)));
+}
+
+function normalizeMedia(items, baseUrl) {
+  if (!Array.isArray(items)) return [];
+  return items
+    .map((item, index) => {
+      const type = item?.type === 'video' ? 'video' : item?.type === 'audio' ? 'audio' : '';
+      const src = resolveAssetUrl(item?.src, baseUrl);
+      if (!type || !src) return null;
+      return {
+        type,
+        src,
+        mimeType: cleanText(item?.mimeType),
+        title: cleanText(item?.title) || mediaLabel(type, index),
+        description: cleanText(item?.description)
+      };
+    })
+    .filter(Boolean);
 }
 
 function indentLevelFromClass(className) {

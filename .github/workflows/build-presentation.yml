@@ -157,7 +157,7 @@ jobs:
       - name: Install PPTX tools
         if: ${{ steps.mode.outputs.presentation_mode == 'pptx' }}
         run: |
-          sudo apt-get install -y libreoffice poppler-utils fonts-dejavu fonts-liberation
+          sudo apt-get install -y libreoffice poppler-utils fonts-dejavu fonts-liberation ffmpeg
 
       - name: Build reveal.js HTML
         if: ${{ steps.mode.outputs.presentation_mode == 'markdown' }}
@@ -208,13 +208,19 @@ jobs:
           PDF_STATUS="$pdf_status" python3 <<'PY'
           import json
           import os
+          import posixpath
+          import shutil
+          import subprocess
+          import zipfile
           from html import escape
           from pathlib import Path
+          from xml.etree import ElementTree as ET
           from pptx import Presentation
 
           output_identifier = os.environ["OUTPUT_IDENTIFIER"]
           source_file = os.environ["SOURCE_FILE"]
           pdf_available = Path("dist/presentation.pdf").exists()
+          pptx_path = Path("source/presentation.pptx")
 
           def slide_number(path):
               return int(path.stem.rsplit("-", 1)[1])
@@ -253,15 +259,204 @@ jobs:
               )
               return f'            <table><tbody>\n{body}\n            </tbody></table>'
 
-          presentation = Presentation("source/presentation.pptx")
+          AUDIO_EXTENSIONS = {".aac", ".aif", ".aiff", ".flac", ".m4a", ".mp3", ".oga", ".ogg", ".opus", ".wav", ".wma"}
+          VIDEO_EXTENSIONS = {".avi", ".m4v", ".mov", ".mp4", ".mpeg", ".mpg", ".ogv", ".webm", ".wmv"}
+          MIME_BY_EXT = {
+              ".aac": "audio/aac",
+              ".m4a": "audio/mp4",
+              ".mp3": "audio/mpeg",
+              ".oga": "audio/ogg",
+              ".ogg": "audio/ogg",
+              ".opus": "audio/ogg",
+              ".wav": "audio/wav",
+              ".mp4": "video/mp4",
+              ".m4v": "video/mp4",
+              ".ogv": "video/ogg",
+              ".webm": "video/webm",
+          }
+
+          def clean_text(value):
+              return " ".join(str(value or "").split())
+
+          def local_name(tag):
+              return tag.rsplit("}", 1)[-1]
+
+          def media_kind(extension):
+              if extension in AUDIO_EXTENSIONS:
+                  return "audio"
+              if extension in VIDEO_EXTENSIONS:
+                  return "video"
+              return ""
+
+          def media_mime_type(extension, kind):
+              return MIME_BY_EXT.get(extension, f"{kind}/{extension.lstrip('.') or 'octet-stream'}")
+
+          def slide_part_path(slide):
+              return str(slide.part.partname).lstrip("/")
+
+          def slide_rels_path(slide_path):
+              directory, filename = posixpath.split(slide_path)
+              return posixpath.join(directory, "_rels", f"{filename}.rels")
+
+          def media_target_path(slide_path, target):
+              if not target or target.startswith("/") or "://" in target:
+                  return ""
+              normalized = posixpath.normpath(posixpath.join(posixpath.dirname(slide_path), target))
+              if normalized.startswith("../") or not normalized.startswith("ppt/media/"):
+                  return ""
+              return normalized
+
+          def element_references_relationship(element, relationship_id):
+              for child in element.iter():
+                  if relationship_id in child.attrib.values():
+                      return True
+              return False
+
+          def labels_for_relationship(slide_root, relationship_id, slide_index, media_index, kind):
+              kind_label = "Wideo" if kind == "video" else "Audio"
+              fallback_title = f"{kind_label} na slajdzie {slide_index}"
+              for element in slide_root.iter():
+                  if local_name(element.tag) not in {"pic", "sp", "graphicFrame"}:
+                      continue
+                  if not element_references_relationship(element, relationship_id):
+                      continue
+                  properties = next((node for node in element.iter() if local_name(node.tag) == "cNvPr"), None)
+                  if properties is None:
+                      break
+                  title = clean_text(properties.attrib.get("title")) or clean_text(properties.attrib.get("name"))
+                  description = clean_text(properties.attrib.get("descr"))
+                  if title.lower().startswith(("media ", "video ", "audio ", "picture ")):
+                      title = ""
+                  return {
+                      "title": title or fallback_title,
+                      "description": description
+                  }
+              return {
+                  "title": f"{fallback_title} {media_index}" if media_index > 1 else fallback_title,
+                  "description": ""
+              }
+
+          def convert_or_copy_media(package, media_path, slide_index, media_index, kind):
+              source_extension = Path(media_path).suffix.lower()
+              target_extension = ".mp3" if kind == "audio" else ".mp4"
+              target_name = f"slide-{slide_index}-media-{media_index}{target_extension}"
+              target_path = Path("dist") / target_name
+              source_tmp = Path("dist") / f"_source-slide-{slide_index}-media-{media_index}{source_extension or '.bin'}"
+              source_tmp.write_bytes(package.read(media_path))
+              converted = False
+              conversion_failed = False
+
+              if shutil.which("ffmpeg"):
+                  if kind == "audio":
+                      command = [
+                          "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                          "-i", str(source_tmp),
+                          "-vn", "-codec:a", "libmp3lame", "-q:a", "4",
+                          str(target_path)
+                      ]
+                  else:
+                      command = [
+                          "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                          "-i", str(source_tmp),
+                          "-map", "0:v:0", "-map", "0:a?",
+                          "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                          "-c:a", "aac", "-movflags", "+faststart",
+                          str(target_path)
+                      ]
+                  try:
+                      subprocess.run(command, check=True, timeout=180)
+                      converted = target_path.exists() and target_path.stat().st_size > 0
+                  except Exception:
+                      conversion_failed = True
+
+              if not converted:
+                  fallback_extension = source_extension or target_extension
+                  target_name = f"slide-{slide_index}-media-{media_index}{fallback_extension}"
+                  target_path = Path("dist") / target_name
+                  target_path.write_bytes(source_tmp.read_bytes())
+                  target_extension = fallback_extension
+                  conversion_failed = True
+
+              try:
+                  source_tmp.unlink()
+              except FileNotFoundError:
+                  pass
+
+              return {
+                  "src": f"./{target_name}",
+                  "mimeType": media_mime_type(target_extension, kind),
+                  "originalPath": media_path,
+                  "converted": converted,
+                  "conversionFailed": conversion_failed
+              }
+
+          def extract_slide_media(package, slide, slide_index):
+              slide_path = slide_part_path(slide)
+              rels_path = slide_rels_path(slide_path)
+              try:
+                  rels_root = ET.fromstring(package.read(rels_path))
+                  slide_root = ET.fromstring(package.read(slide_path))
+              except KeyError:
+                  return []
+
+              media = []
+              seen_targets = set()
+              for relationship in rels_root:
+                  relationship_id = relationship.attrib.get("Id", "")
+                  target_mode = relationship.attrib.get("TargetMode", "")
+                  target = relationship.attrib.get("Target", "")
+                  if target_mode.lower() == "external":
+                      continue
+                  media_path = media_target_path(slide_path, target)
+                  extension = Path(media_path).suffix.lower()
+                  kind = media_kind(extension)
+                  if not media_path or not kind or media_path in seen_targets:
+                      continue
+                  seen_targets.add(media_path)
+                  labels = labels_for_relationship(slide_root, relationship_id, slide_index, len(media) + 1, kind)
+                  published = convert_or_copy_media(package, media_path, slide_index, len(media) + 1, kind)
+                  media.append({
+                      "type": kind,
+                      "title": labels["title"],
+                      "description": labels["description"],
+                      **published
+                  })
+              return media
+
+          def render_media(media):
+              items = []
+              for item in media:
+                  title = escape(item["title"], quote=True)
+                  description = escape(item["description"]) if item["description"] else ""
+                  caption = f"<figcaption><strong>{escape(item['title'])}</strong>"
+                  if description:
+                      caption += f"<br>{description}"
+                  caption += "</figcaption>"
+                  source = f'<source src="{escape(item["src"], quote=True)}" type="{escape(item["mimeType"], quote=True)}">'
+                  if item["type"] == "video":
+                      player = f'<video controls preload="metadata" aria-label="{title}">{source}</video>'
+                  else:
+                      player = f'<audio controls preload="metadata" aria-label="{title}">{source}</audio>'
+                  items.append(f'              <figure class="slide-media">{player}{caption}</figure>')
+              return "\n".join(items)
+
+          presentation = Presentation(str(pptx_path))
           slide_models = []
           manual_review_slides = []
+          media_conversion_failures = []
+          media_without_descriptions = []
+          with zipfile.ZipFile(pptx_path) as package:
+              slide_media_by_index = {
+                  index: extract_slide_media(package, slide, index)
+                  for index, slide in enumerate(presentation.slides, start=1)
+              }
           for index, slide in enumerate(presentation.slides, start=1):
               title_shape = slide.shapes.title
               title = ""
               paragraphs = []
               tables = []
               non_text_shapes = 0
+              media = slide_media_by_index.get(index, [])
 
               for shape in slide.shapes:
                   if getattr(shape, "has_text_frame", False):
@@ -283,13 +478,16 @@ jobs:
 
               if not title:
                   title = f"Slajd {index}"
-              if non_text_shapes:
+              if non_text_shapes or media:
                   manual_review_slides.append(index)
+              media_conversion_failures.extend(index for item in media if item["conversionFailed"])
+              media_without_descriptions.extend(index for item in media if not item["description"])
               slide_models.append({
                   "index": index,
                   "title": title,
                   "paragraphs": paragraphs,
                   "tables": tables,
+                  "media": media,
                   "nonTextShapes": non_text_shapes
               })
 
@@ -309,6 +507,7 @@ jobs:
                   "image": f"./{image.name}" if image else None,
                   "paragraphs": model["paragraphs"],
                   "tables": model["tables"],
+                  "media": model["media"],
                   "nonTextShapes": model["nonTextShapes"]
               })
           Path("dist/slides.json").write_text(
@@ -331,7 +530,8 @@ jobs:
                   for block in model["paragraphs"]
               )
               tables = "\n".join(render_table(block["rows"]) for block in model["tables"])
-              body = paragraphs + ("\n" if paragraphs and tables else "") + tables
+              media = render_media(model["media"])
+              body = "\n".join(part for part in [paragraphs, tables, media] if part)
               if not body:
                   body = '              <p>Brak tekstu możliwego do automatycznego wyciągnięcia z tego slajdu.</p>'
               sections.append(f"""        <section aria-labelledby="slide-title-{index}">
@@ -419,6 +619,18 @@ jobs:
                   border: 1px solid #66717a;
                   padding: 0.35rem;
                 }}
+                .slide-media {{
+                  margin: 1rem 0 0;
+                }}
+                .slide-media video,
+                .slide-media audio {{
+                  display: block;
+                  width: 100%;
+                }}
+                .slide-media figcaption {{
+                  margin-top: 0.4rem;
+                  font-size: 0.8em;
+                }}
                 @media (max-width: 900px) {{
                   .slide-grid {{
                     grid-template-columns: 1fr;
@@ -458,13 +670,18 @@ jobs:
               "pdf": pdf_status,
               "slideImages": len(slide_images),
               "textSlides": sum(1 for slide in slide_models if slide["paragraphs"] or slide["tables"]),
-              "manualReviewSlides": manual_review_slides,
+              "mediaItems": sum(len(slide["media"]) for slide in slide_models),
+              "mediaConversionFailureSlides": sorted(set(media_conversion_failures)),
+              "mediaWithoutDescriptionSlides": sorted(set(media_without_descriptions)),
+              "manualReviewSlides": sorted(set(manual_review_slides)),
               "notes": [
                   "Original PPTX was published.",
                   "PPTX slides were exported as structured slide data and visual previews." if slide_images else "Slide image preview could not be generated.",
                   "Extracted PPTX text is exposed as semantic HTML next to each visual slide.",
+                  "Embedded PPTX audio and video are extracted and rendered as native browser players when present.",
                   "slides.json contains the primary synchronized presentation data for the Prezenter frontend.",
                   "PDF was generated with LibreOffice." if pdf_available else "PDF could not be generated.",
+                  "Audio is transcoded to MP3 and video is transcoded to MP4 when possible.",
                   "Slides with images, charts, icons, or other non-text content still require manual accessibility review."
               ]
           }

@@ -311,12 +311,6 @@ function updatePresentationFrame(force = false) {
 }
 
 function controlledPresentationUrl(presentation, state) {
-  if (presentation.presentationMode === 'pptx') {
-    const pdfUrl = siblingArchiveFileUrl(presentation.resultUrl, 'presentation.pdf');
-    pdfUrl.hash = `page=${Math.max(1, (state.indexh || 0) + 1)}`;
-    return pdfUrl.toString();
-  }
-
   const url = new URL(presentation.resultUrl, window.location.href);
   const h = Math.max(0, state.indexh || 0);
   const v = Math.max(0, state.indexv || 0);
@@ -329,14 +323,6 @@ function controlledPresentationUrl(presentation, state) {
     url.hash = `/${h}`;
   }
   return url.toString();
-}
-
-function siblingArchiveFileUrl(resultUrl, filename) {
-  const url = new URL(resultUrl, window.location.href);
-  url.pathname = url.pathname.replace(/\/[^/]*$/, `/${filename}`);
-  url.search = '';
-  url.hash = '';
-  return url;
 }
 
 function addDetail(label, value) {

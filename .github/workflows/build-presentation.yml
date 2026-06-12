@@ -157,7 +157,7 @@ jobs:
       - name: Install PPTX tools
         if: ${{ steps.mode.outputs.presentation_mode == 'pptx' }}
         run: |
-          sudo apt-get install -y libreoffice fonts-dejavu fonts-liberation
+          sudo apt-get install -y libreoffice poppler-utils fonts-dejavu fonts-liberation
 
       - name: Build reveal.js HTML
         if: ${{ steps.mode.outputs.presentation_mode == 'markdown' }}
@@ -203,6 +203,7 @@ jobs:
           pdf_status="unavailable"
           if libreoffice --headless --convert-to pdf --outdir dist "$pptx" && [ -s dist/presentation.pdf ]; then
             pdf_status="created"
+            pdftoppm -png -r 144 dist/presentation.pdf dist/slide
           fi
           PDF_STATUS="$pdf_status" python3 <<'PY'
           import json
@@ -213,67 +214,84 @@ jobs:
           output_identifier = os.environ["OUTPUT_IDENTIFIER"]
           source_file = os.environ["SOURCE_FILE"]
           pdf_available = Path("dist/presentation.pdf").exists()
+          def slide_number(path):
+              return int(path.stem.rsplit("-", 1)[1])
+
+          slide_images = sorted(Path("dist").glob("slide-*.png"), key=slide_number)
           pdf_status = os.environ.get("PDF_STATUS", "unavailable")
           pdf_link = '<li><a href="./presentation.pdf">Pobierz PDF</a></li>' if pdf_available else ''
-          preview = '<iframe src="./presentation.pdf" title="Podgląd PDF prezentacji"></iframe>' if pdf_available else ''
+          slide_sections = "\n".join(
+              f'        <section><img src="./{escape(image.name)}" alt="Slajd {index} prezentacji"></section>'
+              for index, image in enumerate(slide_images, start=1)
+          )
+          if not slide_sections:
+              slide_sections = '        <section><p>Nie udało się wygenerować podglądu slajdów.</p></section>'
           html = f"""<!doctype html>
           <html lang="pl">
             <head>
               <meta charset="utf-8">
               <meta name="viewport" content="width=device-width, initial-scale=1">
               <title>{escape(output_identifier)} - PPTX</title>
+              <link rel="stylesheet" href="https://unpkg.com/reveal.js@5/dist/reveal.css">
+              <link rel="stylesheet" href="https://unpkg.com/reveal.js@5/dist/theme/white.css">
               <style>
                 :root {{
                   color-scheme: light;
-                  --bg: #f7f7f4;
-                  --text: #181a1b;
-                  --line: #b7c1c8;
                   --accent: #084d3f;
-                  --panel: #ffffff;
                 }}
                 * {{ box-sizing: border-box; }}
-                body {{
-                  margin: 0;
-                  background: var(--bg);
-                  color: var(--text);
-                  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-                  line-height: 1.5;
-                }}
-                main {{
-                  width: min(960px, calc(100% - 32px));
-                  margin: 0 auto;
-                  padding: 32px 0;
-                }}
-                h1 {{ margin: 0 0 12px; font-size: 2rem; line-height: 1.2; }}
                 a {{ color: var(--accent); font-weight: 700; }}
                 a:focus-visible {{ outline: 3px solid #b45309; outline-offset: 3px; }}
-                .panel {{
-                  border: 1px solid var(--line);
-                  border-radius: 8px;
-                  background: var(--panel);
-                  padding: 20px;
+                .reveal .slides section {{
+                  height: 100%;
                 }}
-                iframe {{
-                  width: 100%;
-                  min-height: 72vh;
-                  border: 1px solid var(--line);
+                .reveal .slides img {{
+                  display: block;
+                  max-width: 100%;
+                  max-height: 82vh;
+                  margin: 0 auto;
+                  border: 0;
+                  box-shadow: none;
+                  object-fit: contain;
+                }}
+                .download-links {{
+                  position: fixed;
+                  z-index: 20;
+                  top: 0.75rem;
+                  left: 0.75rem;
+                  display: flex;
+                  flex-wrap: wrap;
+                  gap: 0.75rem;
+                  margin: 0;
+                  padding: 0.5rem 0.75rem;
                   border-radius: 6px;
-                  background: #ffffff;
+                  background: rgba(255, 255, 255, 0.92);
+                  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+                  font-size: 0.95rem;
+                  list-style: none;
                 }}
               </style>
             </head>
             <body>
-              <main>
-                <h1>Prezentacja PPTX</h1>
-                <section class="panel" aria-labelledby="files-title">
-                  <h2 id="files-title">Pliki</h2>
-                  <ul>
-                    <li><a href="./presentation.pptx">Pobierz PPTX ({escape(source_file)})</a></li>
-                    {pdf_link}
-                  </ul>
-                  {preview}
-                </section>
-              </main>
+              <ul class="download-links" aria-label="Pliki prezentacji">
+                <li><a href="./presentation.pptx">Pobierz PPTX ({escape(source_file)})</a></li>
+                {pdf_link}
+              </ul>
+              <div class="reveal">
+                <div class="slides">
+          {slide_sections}
+                </div>
+              </div>
+              <script src="https://unpkg.com/reveal.js@5/dist/reveal.js"></script>
+              <script>
+                Reveal.initialize({{
+                  hash: true,
+                  controls: true,
+                  progress: true,
+                  transition: "none",
+                  backgroundTransition: "none"
+                }});
+              </script>
             </body>
           </html>
           """
@@ -281,9 +299,11 @@ jobs:
           report = {
               "status": "pptx-share-complete",
               "pdf": pdf_status,
+              "slideImages": len(slide_images),
               "notes": [
                   "Original PPTX was published.",
-                  "PDF preview was generated with LibreOffice." if pdf_available else "PDF preview could not be generated.",
+                  "PPTX slides were rendered as images and wrapped in reveal.js." if slide_images else "Slide image preview could not be generated.",
+                  "PDF was generated with LibreOffice." if pdf_available else "PDF could not be generated.",
                   "PPTX accessibility requires manual author review."
               ]
           }
@@ -297,7 +317,7 @@ jobs:
         run: |
           mode="${{ steps.mode.outputs.presentation_mode }}"
           if [ "$mode" = "pptx" ]; then
-            subject="prezenter;pptx;pdf;presentation"
+            subject="prezenter;pptx;revealjs;presentation"
           else
             subject="prezenter;markdown;revealjs;presentation"
           fi

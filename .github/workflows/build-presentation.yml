@@ -47,10 +47,9 @@ jobs:
       - name: Download source bundle
         run: |
           mkdir -p source bundle dist
-          ia download "${{ inputs.source_identifier }}" \
-            --files "${{ inputs.source_file }}" \
-            --destdir bundle \
-            --no-directories
+          curl -fsSL \
+            "https://archive.org/download/${{ inputs.source_identifier }}/${{ inputs.source_file }}" \
+            -o "bundle/${{ inputs.source_file }}"
           case "${{ inputs.source_file }}" in
             *.zip)
               unzip -q "bundle/${{ inputs.source_file }}" -d source
@@ -100,24 +99,14 @@ jobs:
 
       - name: Upload build to Internet Archive
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          import internetarchive
-          import os
-
-          identifier = os.environ["OUTPUT_IDENTIFIER"]
-          item = internetarchive.get_item(identifier)
-          metadata = {
-              "title": f"{identifier} presentation",
-              "mediatype": "data",
-              "creator": "Prezenter",
-              "subject": ["prezenter", "markdown", "revealjs", "presentation"],
-          }
-          files = [str(path) for path in Path("dist").rglob("*") if path.is_file()]
-          item.upload(files, metadata=metadata, retries=3, verbose=True)
-          PY
-        env:
-          OUTPUT_IDENTIFIER: ${{ inputs.output_identifier }}
+          ia upload "${{ inputs.output_identifier }}" \
+            dist/index.html \
+            dist/accessibility-report.json \
+            --metadata "title:${{ inputs.output_identifier }} presentation" \
+            --metadata "mediatype:data" \
+            --metadata "creator:Prezenter" \
+            --metadata "subject:prezenter;markdown;revealjs;presentation" \
+            --retries 3
 
       - name: Callback success
         if: success()
